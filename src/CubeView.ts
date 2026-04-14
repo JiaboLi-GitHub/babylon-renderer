@@ -49,37 +49,39 @@ interface ControllerInfo {
   name: string;
 }
 
-// View angle map: maps controller names to [phi, theta]
+// Z-up CAM: X+=right, Y+=back, Z+=up
+// With upVector=(0,0,1) + right-handed: x=r*sin(b)*cos(a), y=-r*sin(b)*sin(a), z=r*cos(b)
+// VIEW_ANGLES = [beta, alpha] for ArcRotateCamera
 const VIEW_ANGLES: Record<string, [number, number]> = {
   // Faces
-  f0: [Math.PI * 0.5, Math.PI * 0.5],      // RIGHT
-  f1: [0, 0],                                // TOP
-  f2: [Math.PI * 0.5, 0],                    // FRONT
-  f3: [Math.PI * 0.5, -Math.PI * 0.5],      // LEFT
-  f4: [Math.PI, 0],                           // BOTTOM
-  f5: [Math.PI * 0.5, Math.PI],              // BACK
+  f0: [Math.PI * 0.5, 0],                    // RIGHT  (X+)
+  f1: [0, 0],                                // TOP    (Z+)
+  f2: [Math.PI * 0.5, Math.PI * 0.5],       // FRONT  (-Y)
+  f3: [Math.PI * 0.5, Math.PI],             // LEFT   (-X)
+  f4: [Math.PI, 0],                           // BOTTOM (Z-)
+  f5: [Math.PI * 0.5, -Math.PI * 0.5],      // BACK   (Y+)
   // Corners
   c0: [Math.PI * 0.25, Math.PI * 0.25],     // FRONT,TOP,RIGHT
   c1: [Math.PI * 0.75, Math.PI * 0.25],     // FRONT,BOTTOM,RIGHT
-  c2: [Math.PI * 0.75, -Math.PI * 0.25],    // FRONT,BOTTOM,LEFT
-  c3: [Math.PI * 0.25, -Math.PI * 0.25],    // FRONT,TOP,LEFT
-  c4: [Math.PI * 0.25, Math.PI * 0.75],     // BACK,TOP,RIGHT
-  c5: [Math.PI * 0.75, Math.PI * 0.75],     // BACK,BOTTOM,RIGHT
+  c2: [Math.PI * 0.75, Math.PI * 0.75],     // FRONT,BOTTOM,LEFT
+  c3: [Math.PI * 0.25, Math.PI * 0.75],     // FRONT,TOP,LEFT
+  c4: [Math.PI * 0.25, -Math.PI * 0.25],    // BACK,TOP,RIGHT
+  c5: [Math.PI * 0.75, -Math.PI * 0.25],    // BACK,BOTTOM,RIGHT
   c6: [Math.PI * 0.75, -Math.PI * 0.75],    // BACK,BOTTOM,LEFT
   c7: [Math.PI * 0.25, -Math.PI * 0.75],    // BACK,TOP,LEFT
   // Edges
-  e0: [Math.PI * 0.25, 0],                   // TOP,FRONT
-  e1: [Math.PI * 0.75, 0],                   // BOTTOM,FRONT
-  e2: [Math.PI * 0.25, Math.PI],             // TOP,BACK
-  e3: [Math.PI * 0.75, Math.PI],             // BOTTOM,BACK
+  e0: [Math.PI * 0.25, Math.PI * 0.5],      // TOP,FRONT
+  e1: [Math.PI * 0.75, Math.PI * 0.5],      // BOTTOM,FRONT
+  e2: [Math.PI * 0.25, -Math.PI * 0.5],     // TOP,BACK
+  e3: [Math.PI * 0.75, -Math.PI * 0.5],     // BOTTOM,BACK
   e4: [Math.PI * 0.5, Math.PI * 0.25],      // FRONT,RIGHT
-  e5: [Math.PI * 0.5, -Math.PI * 0.25],     // FRONT,LEFT
-  e6: [Math.PI * 0.5, Math.PI * 0.75],      // BACK,RIGHT
+  e5: [Math.PI * 0.5, Math.PI * 0.75],      // FRONT,LEFT
+  e6: [Math.PI * 0.5, -Math.PI * 0.25],     // BACK,RIGHT
   e7: [Math.PI * 0.5, -Math.PI * 0.75],     // BACK,LEFT
-  e8: [Math.PI * 0.25, Math.PI * 0.5],      // TOP,RIGHT
-  e9: [Math.PI * 0.25, -Math.PI * 0.5],     // TOP,LEFT
-  e10: [Math.PI * 0.75, Math.PI * 0.5],     // BOTTOM,RIGHT
-  e11: [Math.PI * 0.75, -Math.PI * 0.5],    // BOTTOM,LEFT
+  e8: [Math.PI * 0.25, 0],                   // TOP,RIGHT
+  e9: [Math.PI * 0.25, Math.PI],             // TOP,LEFT
+  e10: [Math.PI * 0.75, 0],                  // BOTTOM,RIGHT
+  e11: [Math.PI * 0.75, Math.PI],            // BOTTOM,LEFT
 };
 
 export class CubeView {
@@ -128,31 +130,27 @@ export class CubeView {
     this.engine = new Engine(canvas, antialias, { preserveDrawingBuffer: true, stencil: true });
     this.scene = new Scene(this.engine);
     this.scene.clearColor = new Color4(0, 0, 0, 0);
-    // Use right-handed coordinate system to match Three.js conventions
+    // Z-up coordinate system for CAM
     this.scene.useRightHandedSystem = true;
-    // Keep depth buffer between rendering groups so front faces occlude back controllers
     this.scene.setRenderingAutoClearDepthStencil(1, false);
 
-    // Camera: ArcRotateCamera uses (alpha, beta, radius, target)
-    // ArcRotateCamera position: x = r*sin(b)*cos(a), y = r*cos(b), z = r*sin(b)*sin(a)
-    // Three.js position:         x = r*sin(phi)*sin(theta), y = r*cos(phi), z = r*sin(phi)*cos(theta)
-    // Matching: beta = phi, alpha = PI/2 - theta
-    const initialPhi = Math.PI * 0.25;
-    const initialTheta = Math.PI * 0.25;
+    // Camera: Z-up, default isometric showing TOP/FRONT/RIGHT
+    // c0 = FRONT,TOP,RIGHT → beta=PI/4, alpha=PI/4
     this.camera = new ArcRotateCamera(
       'camera',
-      Math.PI / 2 - initialTheta,  // alpha = PI/2 - theta
-      initialPhi,                    // beta = phi
+      Math.PI * 0.25,    // alpha
+      Math.PI * 0.25,    // beta: z>0 (above)
       zoom,
       Vector3.Zero(),
       this.scene
     );
-    this.camera.fov = 50 * Math.PI / 180; // match Three.js 50deg FOV
+    this.camera.upVector = new Vector3(0, 0, 1); // Z-up
+    this.camera.fov = 50 * Math.PI / 180;
     this.camera.minZ = 0.1;
     this.camera.maxZ = 1000;
     this.camera.lowerRadiusLimit = zoom;
     this.camera.upperRadiusLimit = zoom;
-    this.camera.panningSensibility = 0; // disable panning
+    this.camera.panningSensibility = 0;
     this.camera.attachControl(canvas, true);
 
     // Build scene
@@ -230,19 +228,19 @@ export class CubeView {
     const coneHeight = size * 0.12;
     const coneRadius = size * 0.04;
 
-    const axes: [Vector3, Color3][] = [
-      [Vector3.Right(), new Color3(1, 0, 0)],    // X = red
-      [Vector3.Up(), new Color3(0, 1, 0)],        // Y = green
-      [Vector3.Forward(), new Color3(0, 0, 1)],   // Z = blue
+    // Z-up CAM: X=red(right), Y=green(back/forward), Z=blue(up)
+    const axes: [Vector3, Color3, string][] = [
+      [new Vector3(1, 0, 0), new Color3(1, 0, 0), 'X'],    // X = red
+      [new Vector3(0, 1, 0), new Color3(0, 1, 0), 'Y'],    // Y = green
+      [new Vector3(0, 0, 1), new Color3(0, 0, 1), 'Z'],    // Z = blue (up)
     ];
 
-    for (const [dir, color] of axes) {
+    for (const [dir, color, label] of axes) {
       const end = origin.add(dir.scale(axisLength));
-      // Line
       const line = CreateLines('axisLine', { points: [origin, end], updatable: false }, this.scene);
       line.color = color;
       line.isPickable = false;
-      // Cone tip
+
       const cone = MeshBuilder.CreateCylinder('axisCone', {
         diameterTop: 0,
         diameterBottom: coneRadius * 2,
@@ -255,14 +253,11 @@ export class CubeView {
       coneMat.disableLighting = true;
       cone.material = coneMat;
       cone.isPickable = false;
-      // Position cone at end of line, orient along direction
       cone.position = end.add(dir.scale(coneHeight / 2));
+      // Orient cone along axis direction (default cylinder is Y-up)
       if (dir.x === 1) cone.rotation.z = -Math.PI / 2;
       else if (dir.z === 1) cone.rotation.x = Math.PI / 2;
-      // Y axis: default cylinder orientation is along Y, no rotation needed
 
-      // Text label
-      const label = dir.x === 1 ? 'X' : dir.y === 1 ? 'Y' : 'Z';
       const labelSize = size * 0.2;
       const labelPlane = MeshBuilder.CreatePlane('axisLabel_' + label, { size: labelSize }, this.scene);
       const dtex = new DynamicTexture('dtex_' + label, 64, this.scene, false);
@@ -307,26 +302,28 @@ export class CubeView {
     const size = this.cubeSize;
     const half = size / 2;
 
-    // Match Three.js face placement exactly (right-handed system enabled)
+    // Z-up CAM: TOP at Z+, BOTTOM at Z-, FRONT at -Y, BACK at +Y, RIGHT at X+, LEFT at -X
 
-    // TOP face - Y+
+    // TOP face - Z+
     const top = this.createTexturedPlane(size, texture_top);
-    top.position.y = half;
-    top.rotation.x = -Math.PI / 2;
+    top.position.z = half;
+    // Plane default faces +Z in RH; rotate to face outward from Z+
+    // No rotation needed — plane faces +Z by default
 
-    // BOTTOM face - Y-
+    // BOTTOM face - Z-
     const bottom = this.createTexturedPlane(size, texture_bottom);
-    bottom.position.y = -half;
-    bottom.rotation.x = Math.PI / 2;
+    bottom.position.z = -half;
+    bottom.rotation.x = Math.PI;
 
-    // FRONT face - Z+
+    // FRONT face - Y- (towards operator)
     const front = this.createTexturedPlane(size, texture_front);
-    front.position.z = half;
+    front.position.y = -half;
+    front.rotation.x = Math.PI / 2;
 
-    // BACK face - Z-
+    // BACK face - Y+
     const back = this.createTexturedPlane(size, texture_back);
-    back.position.z = -half;
-    back.rotation.y = Math.PI;
+    back.position.y = half;
+    back.rotation.x = -Math.PI / 2;
 
     // RIGHT face - X+
     const right = this.createTexturedPlane(size, texture_right);
@@ -338,10 +335,10 @@ export class CubeView {
     left.position.x = -half;
     left.rotation.y = -Math.PI / 2;
 
-    // Shadow plane
+    // Shadow plane - Z- (below the cube)
     const shadow = this.createTexturedPlane(size + 1.5, texture_shadow, false);
-    shadow.position.y = -half - 0.4;
-    shadow.rotation.x = -Math.PI / 2;
+    shadow.position.z = -half - 0.4;
+    // Shadow faces +Z (upward) — no rotation needed
   }
 
   private createControllerBox(
@@ -379,16 +376,16 @@ export class CubeView {
     const half = size / 2;
     const quarter = size / 4;
 
-    // --- Corner cubes (8) ---
+    // --- Corner cubes (8) --- Z-up: x=LR, y=FB, z=TB
     const cornerPositions: [string, number, number, number][] = [
-      ['c0', 1, 1, 1],    // FRONT,TOP,RIGHT
-      ['c1', 1, -1, 1],   // FRONT,BOTTOM,RIGHT
-      ['c2', -1, -1, 1],  // FRONT,BOTTOM,LEFT
-      ['c3', -1, 1, 1],   // FRONT,TOP,LEFT
-      ['c4', 1, 1, -1],   // BACK,TOP,RIGHT
-      ['c5', 1, -1, -1],  // BACK,BOTTOM,RIGHT
-      ['c6', -1, -1, -1], // BACK,BOTTOM,LEFT
-      ['c7', -1, 1, -1],  // BACK,TOP,LEFT
+      ['c0', 1, -1, 1],   // FRONT,TOP,RIGHT    (X+,-Y,Z+)
+      ['c1', 1, -1, -1],  // FRONT,BOTTOM,RIGHT  (X+,-Y,Z-)
+      ['c2', -1, -1, -1], // FRONT,BOTTOM,LEFT   (-X,-Y,Z-)
+      ['c3', -1, -1, 1],  // FRONT,TOP,LEFT      (-X,-Y,Z+)
+      ['c4', 1, 1, 1],    // BACK,TOP,RIGHT      (X+,Y+,Z+)
+      ['c5', 1, 1, -1],   // BACK,BOTTOM,RIGHT   (X+,Y+,Z-)
+      ['c6', -1, 1, -1],  // BACK,BOTTOM,LEFT    (-X,Y+,Z-)
+      ['c7', -1, 1, 1],   // BACK,TOP,LEFT       (-X,Y+,Z+)
     ];
 
     for (const [name, x, y, z] of cornerPositions) {
@@ -401,20 +398,20 @@ export class CubeView {
       this.createControllerBox(name, quarter, quarter, quarter, px, py, pz);
     }
 
-    // --- Edge cubes (12) ---
+    // --- Edge cubes (12) --- Z-up: x=LR, y=FB, z=TB
     const edgePositions: [string, number, number, number][] = [
-      ['e0', 0, 1, 1],    // TOP,FRONT
-      ['e1', 0, -1, 1],   // BOTTOM,FRONT
-      ['e2', 0, 1, -1],   // TOP,BACK
-      ['e3', 0, -1, -1],  // BOTTOM,BACK
-      ['e4', 1, 0, 1],    // FRONT,RIGHT
-      ['e5', -1, 0, 1],   // FRONT,LEFT
-      ['e6', 1, 0, -1],   // BACK,RIGHT
-      ['e7', -1, 0, -1],  // BACK,LEFT
-      ['e8', 1, 1, 0],    // TOP,RIGHT
-      ['e9', -1, 1, 0],   // TOP,LEFT
-      ['e10', 1, -1, 0],  // BOTTOM,RIGHT
-      ['e11', -1, -1, 0], // BOTTOM,LEFT
+      ['e0', 0, -1, 1],   // TOP,FRONT     (0,-Y,Z+)
+      ['e1', 0, -1, -1],  // BOTTOM,FRONT  (0,-Y,Z-)
+      ['e2', 0, 1, 1],    // TOP,BACK      (0,Y+,Z+)
+      ['e3', 0, 1, -1],   // BOTTOM,BACK   (0,Y+,Z-)
+      ['e4', 1, -1, 0],   // FRONT,RIGHT   (X+,-Y,0)
+      ['e5', -1, -1, 0],  // FRONT,LEFT    (-X,-Y,0)
+      ['e6', 1, 1, 0],    // BACK,RIGHT    (X+,Y+,0)
+      ['e7', -1, 1, 0],   // BACK,LEFT     (-X,Y+,0)
+      ['e8', 1, 0, 1],    // TOP,RIGHT     (X+,0,Z+)
+      ['e9', -1, 0, 1],   // TOP,LEFT      (-X,0,Z+)
+      ['e10', 1, 0, -1],  // BOTTOM,RIGHT  (X+,0,Z-)
+      ['e11', -1, 0, -1], // BOTTOM,LEFT   (-X,0,Z-)
     ];
 
     for (const [name, x, y, z] of edgePositions) {
@@ -434,14 +431,14 @@ export class CubeView {
       this.createControllerBox(name, sx, sy, sz, px, py, pz);
     }
 
-    // --- Face cubes (6) ---
+    // --- Face cubes (6) --- Z-up: x=LR, y=FB, z=TB
     const facePositions: [string, number, number, number][] = [
-      ['f0', 1, 0, 0],  // RIGHT
-      ['f1', 0, 1, 0],  // TOP
-      ['f2', 0, 0, 1],  // FRONT
-      ['f3', -1, 0, 0], // LEFT
-      ['f4', 0, -1, 0], // BOTTOM
-      ['f5', 0, 0, -1], // BACK
+      ['f0', 1, 0, 0],   // RIGHT  (X+)
+      ['f1', 0, 0, 1],   // TOP    (Z+)
+      ['f2', 0, -1, 0],  // FRONT  (-Y)
+      ['f3', -1, 0, 0],  // LEFT   (-X)
+      ['f4', 0, 0, -1],  // BOTTOM (Z-)
+      ['f5', 0, 1, 0],   // BACK   (Y+)
     ];
 
     for (const [name, x, y, z] of facePositions) {
@@ -529,19 +526,16 @@ export class CubeView {
   }
 
   /**
-   * Convert from Three.js spherical (phi, theta) to Babylon ArcRotateCamera (alpha, beta).
-   * ArcRotateCamera: x = r*sin(b)*cos(a), z = r*sin(b)*sin(a)
-   * Three.js:        x = r*sin(phi)*sin(theta), z = r*sin(phi)*cos(theta)
-   * => beta = phi, alpha = PI/2 - theta
+   * Z-up camera: VIEW_ANGLES stores [beta, alpha] directly.
+   * beta = polar angle from Z+ (0=top, PI=bottom)
+   * alpha = azimuthal angle in XY plane from X+
    */
-  private phiThetaToAlphaBeta(phi: number, theta: number): [number, number] {
-    return [Math.PI / 2 - theta, phi];
+  private phiThetaToAlphaBeta(beta: number, alpha: number): [number, number] {
+    return [alpha, beta];
   }
 
   private alphaBetaToPhiTheta(): [number, number] {
-    const phi = this.camera.beta;
-    const theta = Math.PI / 2 - this.camera.alpha;
-    return [phi, theta];
+    return [this.camera.beta, this.camera.alpha];
   }
 
   private animateToAngles(phi: number, theta: number) {
@@ -601,11 +595,12 @@ export class CubeView {
   }
 
   clickHome() {
-    const phi = Math.PI * 0.25;
-    const theta = Math.PI * 0.25;
-    this.animateToAngles(phi, theta);
+    // Default isometric: FRONT,TOP,RIGHT → beta=PI/4, alpha=PI/4
+    const beta = Math.PI * 0.25;
+    const alpha = Math.PI * 0.25;
+    this.animateToAngles(beta, alpha);
     if (this.onUpdateAngles) {
-      this.onUpdateAngles(phi, theta);
+      this.onUpdateAngles(beta, alpha);
     }
   }
 
