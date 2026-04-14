@@ -262,7 +262,19 @@ export class CubeView {
       const labelPlane = MeshBuilder.CreatePlane('axisLabel_' + label, { size: labelSize }, this.scene);
       const dtex = new DynamicTexture('dtex_' + label, 64, this.scene, false);
       dtex.hasAlpha = true;
-      dtex.drawText(label, null, null, 'bold 44px Arial', color.toHexString(), 'transparent', true);
+      // Draw mirrored text to counteract right-handed billboard flip
+      const ctx = dtex.getContext();
+      ctx.clearRect(0, 0, 64, 64);
+      ctx.save();
+      ctx.translate(64, 0);
+      ctx.scale(-1, 1);
+      ctx.font = 'bold 44px Arial';
+      ctx.fillStyle = color.toHexString();
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, 32, 32);
+      ctx.restore();
+      dtex.update();
       const labelMat = new StandardMaterial('labelMat_' + label, this.scene);
       labelMat.diffuseTexture = dtex;
       labelMat.emissiveTexture = dtex;
