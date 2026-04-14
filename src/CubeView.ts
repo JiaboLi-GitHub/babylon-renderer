@@ -12,10 +12,11 @@ import {
   PointerEventTypes,
   PointerInfo,
   TransformNode,
-  AxesViewer,
   Animation,
   CubicEase,
   EasingFunction,
+  LinesMesh,
+  CreateLines,
 } from '@babylonjs/core';
 
 import {
@@ -223,16 +224,41 @@ export class CubeView {
 
   private createAxes() {
     const size = this.cubeSize;
-    const axesViewer = new AxesViewer(this.scene, size);
-    const offset = -size / 2 - 0.01;
-    axesViewer.xAxis.position = new Vector3(offset, offset, offset);
-    axesViewer.yAxis.position = new Vector3(offset, offset, offset);
-    axesViewer.zAxis.position = new Vector3(offset, offset, offset);
-    // Make axes non-pickable so they don't interfere with controller picking
-    for (const mesh of this.scene.meshes) {
-      if (mesh.name === 'cylinder') {
-        mesh.isPickable = false;
-      }
+    const origin = new Vector3(-size / 2 - 0.01, -size / 2 - 0.01, -size / 2 - 0.01);
+    const axisLength = size;
+    const coneHeight = size * 0.12;
+    const coneRadius = size * 0.04;
+
+    const axes: [Vector3, Color3][] = [
+      [Vector3.Right(), new Color3(1, 0, 0)],    // X = red
+      [Vector3.Up(), new Color3(0, 1, 0)],        // Y = green
+      [Vector3.Forward(), new Color3(0, 0, 1)],   // Z = blue
+    ];
+
+    for (const [dir, color] of axes) {
+      const end = origin.add(dir.scale(axisLength));
+      // Line
+      const line = CreateLines('axisLine', { points: [origin, end], updatable: false }, this.scene);
+      line.color = color;
+      line.isPickable = false;
+      // Cone tip
+      const cone = MeshBuilder.CreateCylinder('axisCone', {
+        diameterTop: 0,
+        diameterBottom: coneRadius * 2,
+        height: coneHeight,
+        tessellation: 12,
+      }, this.scene);
+      const coneMat = new StandardMaterial('coneMat', this.scene);
+      coneMat.diffuseColor = color;
+      coneMat.emissiveColor = color;
+      coneMat.disableLighting = true;
+      cone.material = coneMat;
+      cone.isPickable = false;
+      // Position cone at end of line, orient along direction
+      cone.position = end.add(dir.scale(coneHeight / 2));
+      if (dir.x === 1) cone.rotation.z = -Math.PI / 2;
+      else if (dir.z === 1) cone.rotation.x = Math.PI / 2;
+      // Y axis: default cylinder orientation is along Y, no rotation needed
     }
   }
 
