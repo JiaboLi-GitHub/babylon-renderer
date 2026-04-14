@@ -223,7 +223,7 @@ export class CubeView {
 
   private createAxes() {
     const size = this.cubeSize;
-    const axesViewer = new AxesViewer(this.scene, size * 0.5);
+    const axesViewer = new AxesViewer(this.scene, size);
     const offset = -size / 2 - 0.01;
     axesViewer.xAxis.position = new Vector3(offset, offset, offset);
     axesViewer.yAxis.position = new Vector3(offset, offset, offset);
