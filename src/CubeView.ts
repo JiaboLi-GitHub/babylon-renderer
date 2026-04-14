@@ -128,6 +128,8 @@ export class CubeView {
     this.scene.clearColor = new Color4(0, 0, 0, 0);
     // Use right-handed coordinate system to match Three.js conventions
     this.scene.useRightHandedSystem = true;
+    // Keep depth buffer between rendering groups so front faces occlude back controllers
+    this.scene.setRenderingAutoClearDepthStencil(1, false);
 
     // Camera: ArcRotateCamera uses (alpha, beta, radius, target)
     // ArcRotateCamera position: x = r*sin(b)*cos(a), y = r*cos(b), z = r*sin(b)*sin(a)
