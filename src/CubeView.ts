@@ -225,7 +225,7 @@ export class CubeView {
   private createAxes() {
     const size = this.cubeSize;
     const origin = new Vector3(-size / 2 - 0.01, -size / 2 - 0.01, -size / 2 - 0.01);
-    const axisLength = size;
+    const axisLength = size * 1.5;
     const coneHeight = size * 0.12;
     const coneRadius = size * 0.04;
 
