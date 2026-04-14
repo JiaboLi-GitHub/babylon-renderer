@@ -247,6 +247,7 @@ export class CubeView {
     mat.diffuseTexture = new Texture(textureData, this.scene);
     mat.emissiveTexture = new Texture(textureData, this.scene);
     mat.disableLighting = true;
+    mat.transparencyMode = 0; // OPAQUE - force ignore PNG alpha channel
     plane.material = mat;
     plane.isPickable = false;
     return plane;
@@ -296,10 +297,22 @@ export class CubeView {
     left.position.x = -half;
     left.rotation.y = -Math.PI / 2;
 
-    // Shadow plane
-    const shadow = this.createTexturedPlane(size + 1.5, texture_shadow, false);
-    shadow.position.y = -half - 0.4;
-    shadow.rotation.x = -Math.PI / 2;
+    // Shadow plane (needs transparency for fade effect)
+    const shadowPlane = MeshBuilder.CreatePlane('shadow', {
+      size: size + 1.5,
+      sideOrientation: Mesh.FRONTSIDE,
+    }, this.scene);
+    const shadowMat = new StandardMaterial('shadowMat', this.scene);
+    shadowMat.diffuseTexture = new Texture(texture_shadow, this.scene);
+    shadowMat.diffuseTexture.hasAlpha = true;
+    shadowMat.useAlphaFromDiffuseTexture = true;
+    shadowMat.emissiveTexture = new Texture(texture_shadow, this.scene);
+    shadowMat.emissiveTexture.hasAlpha = true;
+    shadowMat.disableLighting = true;
+    shadowPlane.material = shadowMat;
+    shadowPlane.isPickable = false;
+    shadowPlane.position.y = -half - 0.4;
+    shadowPlane.rotation.x = -Math.PI / 2;
   }
 
   private createControllerBox(
