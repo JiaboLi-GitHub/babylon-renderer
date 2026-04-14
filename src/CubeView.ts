@@ -245,10 +245,7 @@ export class CubeView {
     }, this.scene);
     const mat = new StandardMaterial('mat', this.scene);
     mat.diffuseTexture = new Texture(textureData, this.scene);
-    mat.diffuseTexture.hasAlpha = true;
-    mat.useAlphaFromDiffuseTexture = true;
     mat.emissiveTexture = new Texture(textureData, this.scene);
-    mat.emissiveTexture.hasAlpha = true;
     mat.disableLighting = true;
     plane.material = mat;
     plane.isPickable = false;
@@ -258,6 +255,15 @@ export class CubeView {
   private createCubeFaces() {
     const size = this.cubeSize;
     const half = size / 2;
+
+    // Solid opaque core box behind the textured faces
+    const coreBox = MeshBuilder.CreateBox('coreBox', { size: size * 0.99 }, this.scene);
+    const coreMat = new StandardMaterial('coreMat', this.scene);
+    coreMat.diffuseColor = new Color3(0.85, 0.85, 0.85);
+    coreMat.emissiveColor = new Color3(0.85, 0.85, 0.85);
+    coreMat.disableLighting = true;
+    coreBox.material = coreMat;
+    coreBox.isPickable = false;
 
     // Match Three.js face placement exactly (right-handed system enabled)
 
