@@ -247,9 +247,11 @@ export class CubeView {
     }, this.scene);
     const mat = new StandardMaterial('mat', this.scene);
     mat.diffuseTexture = new Texture(textureData, this.scene);
+    mat.diffuseTexture.hasAlpha = true;
+    mat.useAlphaFromDiffuseTexture = true;
     mat.emissiveTexture = new Texture(textureData, this.scene);
+    mat.emissiveTexture.hasAlpha = true;
     mat.disableLighting = true;
-    mat.transparencyMode = 0; // OPAQUE - force ignore PNG alpha channel
     plane.material = mat;
     plane.isPickable = false;
     return plane;
@@ -258,15 +260,6 @@ export class CubeView {
   private createCubeFaces() {
     const size = this.cubeSize;
     const half = size / 2;
-
-    // Solid opaque core box behind the textured faces
-    const coreBox = MeshBuilder.CreateBox('coreBox', { size: size * 0.99 }, this.scene);
-    const coreMat = new StandardMaterial('coreMat', this.scene);
-    coreMat.diffuseColor = new Color3(0.85, 0.85, 0.85);
-    coreMat.emissiveColor = new Color3(0.85, 0.85, 0.85);
-    coreMat.disableLighting = true;
-    coreBox.material = coreMat;
-    coreBox.isPickable = false;
 
     // Match Three.js face placement exactly (right-handed system enabled)
 
@@ -299,22 +292,10 @@ export class CubeView {
     left.position.x = -half;
     left.rotation.y = -Math.PI / 2;
 
-    // Shadow plane (needs transparency for fade effect)
-    const shadowPlane = MeshBuilder.CreatePlane('shadow', {
-      size: size + 1.5,
-      sideOrientation: Mesh.FRONTSIDE,
-    }, this.scene);
-    const shadowMat = new StandardMaterial('shadowMat', this.scene);
-    shadowMat.diffuseTexture = new Texture(texture_shadow, this.scene);
-    shadowMat.diffuseTexture.hasAlpha = true;
-    shadowMat.useAlphaFromDiffuseTexture = true;
-    shadowMat.emissiveTexture = new Texture(texture_shadow, this.scene);
-    shadowMat.emissiveTexture.hasAlpha = true;
-    shadowMat.disableLighting = true;
-    shadowPlane.material = shadowMat;
-    shadowPlane.isPickable = false;
-    shadowPlane.position.y = -half - 0.4;
-    shadowPlane.rotation.x = -Math.PI / 2;
+    // Shadow plane
+    const shadow = this.createTexturedPlane(size + 1.5, texture_shadow, false);
+    shadow.position.y = -half - 0.4;
+    shadow.rotation.x = -Math.PI / 2;
   }
 
   private createControllerBox(
