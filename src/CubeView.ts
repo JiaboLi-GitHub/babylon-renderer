@@ -252,6 +252,7 @@ export class CubeView {
     mat.emissiveTexture = new Texture(textureData, this.scene);
     mat.emissiveTexture.hasAlpha = true;
     mat.disableLighting = true;
+    mat.needDepthPrePass = true; // write depth even with alpha, so controllers are properly occluded
     plane.material = mat;
     plane.isPickable = false;
     return plane;
