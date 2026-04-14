@@ -29,7 +29,6 @@ import {
   texture_front,
   texture_back,
   texture_bottom,
-  texture_shadow,
 } from './textures';
 
 export interface CubeViewOptions {
@@ -347,10 +346,6 @@ export class CubeView {
     left.position.x = -half;
     left.rotation.y = -Math.PI / 2;
 
-    // Shadow plane - Z- (below the cube)
-    const shadow = this.createTexturedPlane(size + 1.5, texture_shadow, false);
-    shadow.position.z = -half - 0.4;
-    // Shadow faces +Z (upward) — no rotation needed
   }
 
   private createControllerBox(
