@@ -6,6 +6,7 @@ import {
   MeshBuilder,
   StandardMaterial,
   Texture,
+  DynamicTexture,
   Color3,
   Color4,
   Mesh,
@@ -259,6 +260,24 @@ export class CubeView {
       if (dir.x === 1) cone.rotation.z = -Math.PI / 2;
       else if (dir.z === 1) cone.rotation.x = Math.PI / 2;
       // Y axis: default cylinder orientation is along Y, no rotation needed
+
+      // Text label
+      const label = dir.x === 1 ? 'X' : dir.y === 1 ? 'Y' : 'Z';
+      const labelSize = size * 0.2;
+      const labelPlane = MeshBuilder.CreatePlane('axisLabel_' + label, { size: labelSize }, this.scene);
+      const dtex = new DynamicTexture('dtex_' + label, 64, this.scene, false);
+      dtex.hasAlpha = true;
+      dtex.drawText(label, null, null, 'bold 44px Arial', color.toHexString(), 'transparent', true);
+      const labelMat = new StandardMaterial('labelMat_' + label, this.scene);
+      labelMat.diffuseTexture = dtex;
+      labelMat.emissiveTexture = dtex;
+      labelMat.useAlphaFromDiffuseTexture = true;
+      labelMat.disableLighting = true;
+      labelMat.backFaceCulling = false;
+      labelPlane.material = labelMat;
+      labelPlane.isPickable = false;
+      labelPlane.billboardMode = Mesh.BILLBOARDMODE_ALL;
+      labelPlane.position = end.add(dir.scale(coneHeight + labelSize * 0.6));
     }
   }
 
