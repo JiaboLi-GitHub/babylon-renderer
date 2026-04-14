@@ -269,8 +269,8 @@ export class CubeView {
       ctx.scale(-1, 1);
       ctx.font = 'bold 44px Arial';
       ctx.fillStyle = color.toHexString();
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
+      (ctx as any).textAlign = 'center';
+      (ctx as any).textBaseline = 'middle';
       ctx.fillText(label, 32, 32);
       ctx.restore();
       dtex.update();
@@ -318,15 +318,15 @@ export class CubeView {
     // TOP face - Z+
     const top = this.createTexturedPlane(size, texture_top);
     top.position.z = half;
-    // Plane default faces +Z in RH; rotate to face outward from Z+
-    // No rotation needed — plane faces +Z by default
+    top.rotation.z = Math.PI / 2;
 
     // BOTTOM face - Z-
     const bottom = this.createTexturedPlane(size, texture_bottom);
     bottom.position.z = -half;
     bottom.rotation.x = Math.PI;
+    bottom.rotation.z = -Math.PI / 2;
 
-    // FRONT face - Y- (towards operator)
+    // FRONT face - Y- (text already correct in Z-up)
     const front = this.createTexturedPlane(size, texture_front);
     front.position.y = -half;
     front.rotation.x = Math.PI / 2;
@@ -335,16 +335,19 @@ export class CubeView {
     const back = this.createTexturedPlane(size, texture_back);
     back.position.y = half;
     back.rotation.x = -Math.PI / 2;
+    back.rotation.z = Math.PI;
 
-    // RIGHT face - X+
+    // RIGHT face - X+ (text correction: rotate 90° around local Z after Y rotation)
     const right = this.createTexturedPlane(size, texture_right);
     right.position.x = half;
     right.rotation.y = Math.PI / 2;
+    right.rotation.z = Math.PI / 2;
 
     // LEFT face - X-
     const left = this.createTexturedPlane(size, texture_left);
     left.position.x = -half;
     left.rotation.y = -Math.PI / 2;
+    left.rotation.z = -Math.PI / 2;
 
   }
 
