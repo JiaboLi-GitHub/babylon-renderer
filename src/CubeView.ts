@@ -318,6 +318,7 @@ export class CubeView {
     mat.disableLighting = true;
     box.material = mat;
     box.visibility = 0.001;
+    box.renderingGroupId = 1; // render on top of textured planes
     box.position.set(posX, posY, posZ);
     box.parent = this.controllers;
 
