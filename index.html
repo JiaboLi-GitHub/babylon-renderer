@@ -3,126 +3,114 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Babylon.js CubeView</title>
+  <title>Babylon.js Scene + ViewCube</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a2e;
-      color: #eee;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 40px 20px;
-    }
-    h1 {
-      margin-bottom: 8px;
-      font-weight: 300;
-      font-size: 28px;
-    }
-    .subtitle {
-      color: #888;
-      margin-bottom: 30px;
-      font-size: 14px;
-    }
-    .demos {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 30px;
-      justify-content: center;
-    }
-    .demo-card {
-      background: #16213e;
-      border-radius: 12px;
-      padding: 20px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-    .demo-card h3 {
-      margin-bottom: 12px;
-      font-weight: 400;
-      font-size: 16px;
-      color: #aaa;
-    }
-    .angle-display {
-      margin-top: 10px;
-      font-size: 12px;
-      color: #666;
-      font-family: monospace;
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    #mainCanvas { width: 100%; height: 100%; display: block; }
+    #cubeViewWrapper {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 10;
     }
   </style>
 </head>
 <body>
-  <h1>Babylon.js CubeView</h1>
-  <p class="subtitle">Interactive 3D navigation cube &mdash; rewrite of react-cubeview using Babylon.js</p>
-
-  <div class="demos">
-    <div class="demo-card">
-      <h3>Simple (200x200)</h3>
-      <canvas id="cube1" width="200" height="200"></canvas>
-      <div class="angle-display" id="angles1"></div>
-    </div>
-
-    <div class="demo-card">
-      <h3>Bigger (400x400)</h3>
-      <canvas id="cube2" width="400" height="400"></canvas>
-      <div class="angle-display" id="angles2"></div>
-    </div>
-
-    <div class="demo-card">
-      <h3>Custom Color (red hover)</h3>
-      <canvas id="cube3" width="250" height="250"></canvas>
-      <div class="angle-display" id="angles3"></div>
-    </div>
+  <canvas id="mainCanvas"></canvas>
+  <div id="cubeViewWrapper">
+    <canvas id="cubeViewCanvas" width="150" height="150"></canvas>
   </div>
 
   <script type="module">
+    import {
+      Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight,
+      MeshBuilder, StandardMaterial, Color3, Color4
+    } from '@babylonjs/core';
+    import { GridMaterial } from '@babylonjs/materials';
     import { CubeView } from './src/index.ts';
 
-    const cv1 = new CubeView({
-      canvas: document.getElementById('cube1'),
-      width: 200,
-      height: 200,
-      aspect: 1,
-      hoverColor: '#0088ff',
-      cubeSize: 2,
-      zoom: 6,
-      antialias: false,
-      onUpdateAngles: (phi, theta) => {
-        document.getElementById('angles1').textContent =
-          `phi: ${(phi / Math.PI).toFixed(3)}π  theta: ${(theta / Math.PI).toFixed(3)}π`;
-      }
-    });
+    // --- Main Scene ---
+    const mainCanvas = document.getElementById('mainCanvas');
+    const engine = new Engine(mainCanvas, true, { preserveDrawingBuffer: true });
+    const scene = new Scene(engine);
+    scene.clearColor = new Color4(0.15, 0.15, 0.2, 1);
+    scene.useRightHandedSystem = true;
 
-    const cv2 = new CubeView({
-      canvas: document.getElementById('cube2'),
-      width: 400,
-      height: 400,
+    // Z-up camera
+    const camera = new ArcRotateCamera('cam', Math.PI * 0.25, Math.PI * 0.25, 15, Vector3.Zero(), scene);
+    camera.upVector = new Vector3(0, 0, 1);
+    camera.lowerBetaLimit = null;
+    camera.upperBetaLimit = null;
+    camera.allowUpsideDown = true;
+    camera.minZ = 0.1;
+    camera.attachControl(mainCanvas, true);
+
+    // Light
+    const light = new HemisphericLight('light', new Vector3(0.3, -0.5, 1), scene);
+    light.intensity = 0.9;
+
+    // Ground grid (XY plane at Z=0 for Z-up)
+    const ground = MeshBuilder.CreateGround('ground', { width: 20, height: 20 }, scene);
+    ground.rotation.x = Math.PI / 2;
+    const gridMat = new GridMaterial('gridMat', scene);
+    gridMat.majorUnitFrequency = 5;
+    gridMat.minorUnitVisibility = 0.3;
+    gridMat.gridRatio = 1;
+    gridMat.mainColor = new Color3(0.2, 0.2, 0.25);
+    gridMat.lineColor = new Color3(0.4, 0.4, 0.5);
+    gridMat.backFaceCulling = false;
+    ground.material = gridMat;
+
+    // Simple cube
+    const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
+    box.position.z = 1;
+    const boxMat = new StandardMaterial('boxMat', scene);
+    boxMat.diffuseColor = new Color3(0.2, 0.6, 0.9);
+    box.material = boxMat;
+
+    engine.runRenderLoop(() => scene.render());
+    window.addEventListener('resize', () => engine.resize());
+
+    // --- ViewCube ---
+    let cubeViewDriving = false;
+
+    const cubeView = new CubeView({
+      canvas: document.getElementById('cubeViewCanvas'),
+      width: 150,
+      height: 150,
       aspect: 1,
       hoverColor: '#0088ff',
       cubeSize: 2,
       zoom: 6,
       antialias: true,
-      onUpdateAngles: (phi, theta) => {
-        document.getElementById('angles2').textContent =
-          `phi: ${(phi / Math.PI).toFixed(3)}π  theta: ${(theta / Math.PI).toFixed(3)}π`;
+      onOrientationChange: ({ orientation, phase }) => {
+        if (phase === 'start') {
+          cubeViewDriving = true;
+        }
+
+        camera.alpha = orientation.alpha;
+        camera.beta = orientation.beta;
+
+        if (phase === 'end') {
+          cubeViewDriving = false;
+        }
       }
     });
 
-    const cv3 = new CubeView({
-      canvas: document.getElementById('cube3'),
-      width: 250,
-      height: 250,
-      aspect: 1,
-      hoverColor: '#ff0000',
-      cubeSize: 2,
-      zoom: 6,
-      antialias: true,
-      onUpdateAngles: (phi, theta) => {
-        document.getElementById('angles3').textContent =
-          `phi: ${(phi / Math.PI).toFixed(3)}π  theta: ${(theta / Math.PI).toFixed(3)}π`;
+    // Keep the cube synced to the scene camera whenever the scene is driving.
+    camera.onViewMatrixChangedObservable.add(() => {
+      if (!cubeViewDriving) {
+        cubeView.setOrientation({
+          alpha: camera.alpha,
+          beta: camera.beta,
+        });
       }
+    });
+
+    cubeView.setOrientation({
+      alpha: camera.alpha,
+      beta: camera.beta,
     });
   </script>
 </body>
