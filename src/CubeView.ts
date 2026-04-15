@@ -150,6 +150,10 @@ export class CubeView {
     this.camera.lowerRadiusLimit = zoom;
     this.camera.upperRadiusLimit = zoom;
     this.camera.panningSensibility = 0;
+    // Allow full unrestricted rotation
+    this.camera.lowerBetaLimit = null;
+    this.camera.upperBetaLimit = null;
+    this.camera.allowUpsideDown = true;
     this.camera.attachControl(canvas, true);
 
     // Build scene
