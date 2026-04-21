@@ -7,7 +7,12 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #fff; }
-    #mainCanvas { width: 100%; height: 100%; display: block; }
+    body { position: relative; }
+    #mainCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
     #cubeViewWrapper {
       position: absolute;
       top: 10px;
@@ -41,9 +46,17 @@
   <script type="module">
     import {
       Engine, Scene, ArcRotateCamera, Camera, Vector3, HemisphericLight,
-      MeshBuilder, StandardMaterial, Color3, Color4
+      Matrix, MeshBuilder, StandardMaterial, Color3, Color4, DynamicTexture,
     } from '@babylonjs/core';
     import { CubeView } from './src/index.ts';
+
+    const gridConfig = {
+      size: 20,
+      step: 0.4,
+      majorStep: 2,
+      elevation: 0,
+      coordinateScale: 25,
+    };
 
     // --- Main Scene ---
     const mainCanvas = document.getElementById('mainCanvas');
@@ -54,25 +67,30 @@
 
     function createGridLineMap(scene, {
       size = 20,
-      step = 1,
-      majorStep = 5,
+      step = 0.4,
+      majorStep = 2,
       elevation = 0,
     } = {}) {
       const half = size / 2;
       const minorLines = [];
       const majorLines = [];
+      const axisHeight = elevation + 0.01;
+
+      const isMultipleOf = (value, interval) =>
+        Math.abs(value / interval - Math.round(value / interval)) < 1e-6;
 
       for (let value = -half; value <= half + 1e-6; value += step) {
-        const isMajor = Math.abs(value % majorStep) < 1e-6;
+        const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
+        const isMajor = isMultipleOf(snappedValue, majorStep);
         const target = isMajor ? majorLines : minorLines;
 
         target.push([
-          new Vector3(-half, value, elevation),
-          new Vector3(half, value, elevation),
+          new Vector3(-half, snappedValue, elevation),
+          new Vector3(half, snappedValue, elevation),
         ]);
         target.push([
-          new Vector3(value, -half, elevation),
-          new Vector3(value, half, elevation),
+          new Vector3(snappedValue, -half, elevation),
+          new Vector3(snappedValue, half, elevation),
         ]);
       }
 
@@ -87,8 +105,231 @@
         lines: majorLines,
         updatable: false,
       }, scene);
-      majorGrid.color = new Color3(0.72, 0.72, 0.72);
+      majorGrid.color = new Color3(0.75, 0.75, 0.75);
       majorGrid.isPickable = false;
+
+      const xAxis = MeshBuilder.CreateLines('gridXAxis', {
+        points: [
+          new Vector3(-half, 0, axisHeight),
+          new Vector3(half, 0, axisHeight),
+        ],
+      }, scene);
+      xAxis.color = new Color3(0.74, 0.96, 0.74);
+      xAxis.isPickable = false;
+
+      const yAxis = MeshBuilder.CreateLines('gridYAxis', {
+        points: [
+          new Vector3(0, -half, axisHeight),
+          new Vector3(0, half, axisHeight),
+        ],
+      }, scene);
+      yAxis.color = new Color3(1, 0.58, 0.58);
+      yAxis.isPickable = false;
+    }
+
+    function projectToScreen(scene, camera, point) {
+      return Vector3.Project(
+        point,
+        Matrix.IdentityReadOnly,
+        scene.getTransformMatrix(),
+        camera.viewport.toGlobal(mainCanvas.clientWidth, mainCanvas.clientHeight),
+      );
+    }
+
+    function applyOrthographicBounds(camera) {
+      const minimumHalfHeight = gridConfig.size / 2 + gridConfig.majorStep * 0.5;
+      const halfHeight = Math.max(minimumHalfHeight, camera.radius * Math.tan(camera.fov / 2));
+      const aspect = engine.getAspectRatio(camera);
+      const halfWidth = halfHeight * aspect;
+
+      camera.orthoTop = halfHeight;
+      camera.orthoBottom = -halfHeight;
+      camera.orthoLeft = -halfWidth;
+      camera.orthoRight = halfWidth;
+    }
+
+    function getProjectedGridBoundaries(scene, camera, size, elevation) {
+      const half = size / 2;
+      const positiveY = projectToScreen(scene, camera, new Vector3(0, half, elevation));
+      const negativeY = projectToScreen(scene, camera, new Vector3(0, -half, elevation));
+      const positiveX = projectToScreen(scene, camera, new Vector3(half, 0, elevation));
+      const negativeX = projectToScreen(scene, camera, new Vector3(-half, 0, elevation));
+
+      return {
+        rightY: positiveY.x >= negativeY.x ? half : -half,
+        bottomX: positiveX.y >= negativeX.y ? half : -half,
+      };
+    }
+
+    function createGridLabelMesh(name, text, rotationZ = 0) {
+      const width = Math.max(1.1, text.length * 0.36 + 0.4);
+      const height = 0.58;
+      const plane = MeshBuilder.CreatePlane(name, { width, height }, scene);
+      const textureWidth = 512;
+      const textureHeight = 256;
+      const texture = new DynamicTexture(`${name}_texture`, {
+        width: textureWidth,
+        height: textureHeight,
+      }, scene, true);
+      const ctx = texture.getContext();
+
+      ctx.clearRect(0, 0, textureWidth, textureHeight);
+      ctx.font = '400 100px "Segoe UI", "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#9d9d9d';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, textureWidth / 2, textureHeight / 2);
+
+      texture.hasAlpha = true;
+      texture.update();
+
+      const material = new StandardMaterial(`${name}_material`, scene);
+      material.diffuseTexture = texture;
+      material.emissiveTexture = texture;
+      material.useAlphaFromDiffuseTexture = true;
+      material.disableLighting = true;
+      material.backFaceCulling = false;
+
+      plane.material = material;
+      plane.rotation.z = rotationZ;
+      plane.isPickable = false;
+      plane.renderingGroupId = 1;
+
+      return plane;
+    }
+
+    const gridLabelMeshes = {
+      right: { valueStep: null, entries: [] },
+      bottom: { valueStep: null, entries: [] },
+    };
+
+    function disposeGridLabelEntries(entries) {
+      for (const entry of entries) {
+        if (entry.mesh.material) {
+          entry.mesh.material.dispose(false, true);
+        }
+        entry.mesh.dispose();
+      }
+    }
+
+    function buildGridLabelEntries(axis, valueStep, {
+      size,
+      coordinateScale,
+    }) {
+      const half = size / 2;
+      const worldStep = valueStep / coordinateScale;
+      const entries = [];
+
+      for (let value = -half; value <= half + 1e-6; value += worldStep) {
+        const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
+        const labelText = `${Math.round(Math.abs(snappedValue * coordinateScale))}`;
+        const rotationZ = axis === 'right' ? Math.PI / 2 : 0;
+
+        entries.push({
+          value: snappedValue,
+          mesh: createGridLabelMesh(`grid_${axis}_${valueStep}_${snappedValue}`, labelText, rotationZ),
+        });
+      }
+
+      return entries;
+    }
+
+    function getAdaptiveCoordinateValueStep(pixelSpacing, {
+      coordinateScale,
+      size,
+      step,
+    }) {
+      const baseValueStep = Math.max(1, Math.round(step * coordinateScale));
+      const maxValueStep = Math.max(baseValueStep, Math.round((size / 2) * coordinateScale));
+      const targetPixelSpacing = 70;
+
+      if (!Number.isFinite(pixelSpacing) || pixelSpacing <= 0.5) {
+        return maxValueStep;
+      }
+
+      const candidateSteps = [];
+      let magnitude = 1;
+      while (baseValueStep * magnitude <= maxValueStep * 10) {
+        for (const factor of [1, 2, 5]) {
+          candidateSteps.push(baseValueStep * magnitude * factor);
+        }
+        magnitude *= 10;
+      }
+
+      for (const candidate of candidateSteps) {
+        if (pixelSpacing * (candidate / baseValueStep) >= targetPixelSpacing) {
+          return Math.min(candidate, maxValueStep);
+        }
+      }
+
+      return maxValueStep;
+    }
+
+    function getAdaptiveCoordinateState(scene, camera, {
+      size,
+      step,
+      elevation,
+      coordinateScale,
+    }) {
+      const { rightY, bottomX } = getProjectedGridBoundaries(scene, camera, size, elevation);
+      const baseRightStart = projectToScreen(scene, camera, new Vector3(0, rightY, elevation));
+      const baseRightNext = projectToScreen(scene, camera, new Vector3(step, rightY, elevation));
+      const baseBottomStart = projectToScreen(scene, camera, new Vector3(bottomX, 0, elevation));
+      const baseBottomNext = projectToScreen(scene, camera, new Vector3(bottomX, step, elevation));
+
+      const rightPixelSpacing = Math.hypot(
+        baseRightNext.x - baseRightStart.x,
+        baseRightNext.y - baseRightStart.y,
+      );
+      const bottomPixelSpacing = Math.hypot(
+        baseBottomNext.x - baseBottomStart.x,
+        baseBottomNext.y - baseBottomStart.y,
+      );
+
+      return {
+        rightY,
+        bottomX,
+        rightValueStep: getAdaptiveCoordinateValueStep(rightPixelSpacing, { coordinateScale, size, step }),
+        bottomValueStep: getAdaptiveCoordinateValueStep(bottomPixelSpacing, { coordinateScale, size, step }),
+      };
+    }
+
+    function ensureGridCoordinateMeshes(config, adaptiveState) {
+      for (const axis of ['right', 'bottom']) {
+        const valueStep = adaptiveState[`${axis}ValueStep`];
+        if (gridLabelMeshes[axis].valueStep === valueStep) {
+          continue;
+        }
+
+        disposeGridLabelEntries(gridLabelMeshes[axis].entries);
+        gridLabelMeshes[axis].entries = buildGridLabelEntries(axis, valueStep, config);
+        gridLabelMeshes[axis].valueStep = valueStep;
+      }
+    }
+
+    // Coordinate labels are real scene meshes attached to the projected outer grid edges.
+    function updateGridCoordinateMeshes(scene, camera, config) {
+      const adaptiveState = getAdaptiveCoordinateState(scene, camera, config);
+      ensureGridCoordinateMeshes(config, adaptiveState);
+
+      const { size, elevation } = config;
+      const labelHeight = elevation + 0.03;
+      const worldOffset = Math.max(gridConfig.step * 0.8, 0.28);
+      const { rightY, bottomX } = adaptiveState;
+      const rightYDirection = Math.sign(rightY) || 1;
+      const bottomXDirection = Math.sign(bottomX) || 1;
+      const rightRotation = rightYDirection > 0 ? Math.PI / 2 : -Math.PI / 2;
+      const bottomRotation = bottomXDirection > 0 ? 0 : Math.PI;
+
+      for (const label of gridLabelMeshes.right.entries) {
+        label.mesh.position.set(label.value, rightY + rightYDirection * worldOffset, labelHeight);
+        label.mesh.rotation.z = rightRotation;
+      }
+
+      for (const label of gridLabelMeshes.bottom.entries) {
+        label.mesh.position.set(bottomX + bottomXDirection * worldOffset, label.value, labelHeight);
+        label.mesh.rotation.z = bottomRotation;
+      }
     }
 
     // Z-up camera
@@ -98,6 +339,8 @@
     camera.upperBetaLimit = null;
     camera.allowUpsideDown = true;
     camera.minZ = 0.1;
+    camera.angularSensibilityX = 4500;
+    camera.angularSensibilityY = 4500;
     camera.attachControl(mainCanvas, true);
 
     // Light
@@ -105,12 +348,7 @@
     light.intensity = 0.9;
 
     // Ground grid (XY plane at Z=0 for Z-up)
-    createGridLineMap(scene, {
-      size: 20,
-      step: 1,
-      majorStep: 5,
-      elevation: 0,
-    });
+    createGridLineMap(scene, gridConfig);
 
     // Simple cube
     const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
@@ -119,7 +357,10 @@
     boxMat.diffuseColor = new Color3(0.2, 0.6, 0.9);
     box.material = boxMat;
 
-    engine.runRenderLoop(() => scene.render());
+    engine.runRenderLoop(() => {
+      updateGridCoordinateMeshes(scene, camera, gridConfig);
+      scene.render();
+    });
     window.addEventListener('resize', () => engine.resize());
 
     // --- ViewCube ---
@@ -136,14 +377,8 @@
       antialias: true,
       onProjectionModeChange: (mode) => {
         if (mode === 'orthographic') {
-          const halfHeight = camera.radius * Math.tan(camera.fov / 2);
-          const aspect = engine.getAspectRatio(camera);
-          const halfWidth = halfHeight * aspect;
           camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
-          camera.orthoTop = halfHeight;
-          camera.orthoBottom = -halfHeight;
-          camera.orthoLeft = -halfWidth;
-          camera.orthoRight = halfWidth;
+          applyOrthographicBounds(camera);
         } else {
           camera.mode = Camera.PERSPECTIVE_CAMERA;
         }
@@ -171,13 +406,7 @@
         });
       }
       if (camera.mode === Camera.ORTHOGRAPHIC_CAMERA) {
-        const halfHeight = camera.radius * Math.tan(camera.fov / 2);
-        const aspect = engine.getAspectRatio(camera);
-        const halfWidth = halfHeight * aspect;
-        camera.orthoTop = halfHeight;
-        camera.orthoBottom = -halfHeight;
-        camera.orthoLeft = -halfWidth;
-        camera.orthoRight = halfWidth;
+        applyOrthographicBounds(camera);
       }
     });
 

@@ -198,6 +198,8 @@ export class CubeView {
     this.camera.lowerRadiusLimit = zoom;
     this.camera.upperRadiusLimit = zoom;
     this.camera.panningSensibility = 0;
+    this.camera.angularSensibilityX = 4500;
+    this.camera.angularSensibilityY = 4500;
     this.camera.lowerBetaLimit = null;
     this.camera.upperBetaLimit = null;
     this.camera.allowUpsideDown = true;
