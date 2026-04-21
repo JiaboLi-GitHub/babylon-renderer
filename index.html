@@ -6,7 +6,7 @@
   <title>Babylon.js Scene + ViewCube</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; overflow: hidden; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #fff; }
     #mainCanvas { width: 100%; height: 100%; display: block; }
     #cubeViewWrapper {
       position: absolute;
@@ -43,15 +43,53 @@
       Engine, Scene, ArcRotateCamera, Camera, Vector3, HemisphericLight,
       MeshBuilder, StandardMaterial, Color3, Color4
     } from '@babylonjs/core';
-    import { GridMaterial } from '@babylonjs/materials';
     import { CubeView } from './src/index.ts';
 
     // --- Main Scene ---
     const mainCanvas = document.getElementById('mainCanvas');
     const engine = new Engine(mainCanvas, true, { preserveDrawingBuffer: true });
     const scene = new Scene(engine);
-    scene.clearColor = new Color4(0.15, 0.15, 0.2, 1);
+    scene.clearColor = new Color4(1, 1, 1, 1);
     scene.useRightHandedSystem = true;
+
+    function createGridLineMap(scene, {
+      size = 20,
+      step = 1,
+      majorStep = 5,
+      elevation = 0,
+    } = {}) {
+      const half = size / 2;
+      const minorLines = [];
+      const majorLines = [];
+
+      for (let value = -half; value <= half + 1e-6; value += step) {
+        const isMajor = Math.abs(value % majorStep) < 1e-6;
+        const target = isMajor ? majorLines : minorLines;
+
+        target.push([
+          new Vector3(-half, value, elevation),
+          new Vector3(half, value, elevation),
+        ]);
+        target.push([
+          new Vector3(value, -half, elevation),
+          new Vector3(value, half, elevation),
+        ]);
+      }
+
+      const minorGrid = MeshBuilder.CreateLineSystem('minorGrid', {
+        lines: minorLines,
+        updatable: false,
+      }, scene);
+      minorGrid.color = new Color3(0.9, 0.9, 0.9);
+      minorGrid.isPickable = false;
+
+      const majorGrid = MeshBuilder.CreateLineSystem('majorGrid', {
+        lines: majorLines,
+        updatable: false,
+      }, scene);
+      majorGrid.color = new Color3(0.72, 0.72, 0.72);
+      majorGrid.isPickable = false;
+    }
 
     // Z-up camera
     const camera = new ArcRotateCamera('cam', Math.PI * 0.25, Math.PI * 0.25, 15, Vector3.Zero(), scene);
@@ -67,16 +105,12 @@
     light.intensity = 0.9;
 
     // Ground grid (XY plane at Z=0 for Z-up)
-    const ground = MeshBuilder.CreateGround('ground', { width: 20, height: 20 }, scene);
-    ground.rotation.x = Math.PI / 2;
-    const gridMat = new GridMaterial('gridMat', scene);
-    gridMat.majorUnitFrequency = 5;
-    gridMat.minorUnitVisibility = 0.3;
-    gridMat.gridRatio = 1;
-    gridMat.mainColor = new Color3(0.2, 0.2, 0.25);
-    gridMat.lineColor = new Color3(0.4, 0.4, 0.5);
-    gridMat.backFaceCulling = false;
-    ground.material = gridMat;
+    createGridLineMap(scene, {
+      size: 20,
+      step: 1,
+      majorStep: 5,
+      elevation: 0,
+    });
 
     // Simple cube
     const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
