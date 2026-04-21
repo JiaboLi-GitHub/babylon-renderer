@@ -14,7 +14,6 @@ import {
   PointerInfo,
   Scene,
   StandardMaterial,
-  Texture,
   TransformNode,
   Vector3,
 } from '@babylonjs/core';
@@ -22,12 +21,6 @@ import {
 import {
   icon_home,
   icon_home_hover,
-  texture_back,
-  texture_bottom,
-  texture_front,
-  texture_left,
-  texture_right,
-  texture_top,
 } from './textures';
 
 export interface CubeViewOrientation {
@@ -38,6 +31,24 @@ export interface CubeViewOrientation {
 export type CubeViewChangeSource = 'drag' | 'click' | 'home';
 
 export type CubeViewChangePhase = 'start' | 'update' | 'end';
+
+export type CubeViewProjectionMode = 'perspective' | 'orthographic';
+
+export type CubeViewLocale = 'en' | 'zh';
+
+interface FaceLabels {
+  top: string; bottom: string; front: string; back: string; left: string; right: string;
+}
+
+const FACE_LABELS: Record<CubeViewLocale, FaceLabels> = {
+  en: { top: 'TOP', bottom: 'BOTTOM', front: 'FRONT', back: 'BACK', left: 'LEFT', right: 'RIGHT' },
+  zh: { top: '上', bottom: '下', front: '前', back: '后', left: '左', right: '右' },
+};
+
+const MENU_LABELS: Record<CubeViewLocale, { perspective: string; orthographic: string }> = {
+  en: { perspective: 'Perspective', orthographic: 'Orthographic' },
+  zh: { perspective: '透视', orthographic: '正交' },
+};
 
 export interface CubeViewOrientationChangeEvent {
   orientation: CubeViewOrientation;
@@ -56,6 +67,8 @@ export interface CubeViewOptions {
   antialias?: boolean;
   onUpdateAngles?: (beta: number, alpha: number) => void;
   onOrientationChange?: (event: CubeViewOrientationChangeEvent) => void;
+  onProjectionModeChange?: (mode: CubeViewProjectionMode) => void;
+  locale?: CubeViewLocale;
 }
 
 interface ControllerInfo {
@@ -98,6 +111,10 @@ const VIEW_ANGLES: Record<string, [number, number]> = {
 };
 
 const CLICK_DRAG_THRESHOLD_PX = 6;
+const CUBE_VIEW_CANVAS_CLASS = 'cube-view-canvas';
+const CUBE_VIEW_FOCUS_STYLE_ID = 'cube-view-focus-style';
+const CUBE_VIEW_INPUT_MODALITY_ATTR = 'data-cube-view-input-modality';
+const CUBE_VIEW_INPUT_TRACKING_ATTR = 'data-cube-view-input-tracking';
 
 export class CubeView {
   private engine: Engine;
@@ -118,6 +135,15 @@ export class CubeView {
   private pointerDownPosition: { x: number; y: number } | null = null;
   private isDragging = false;
   private activeInteractionSource: CubeViewChangeSource | null = null;
+  private projectionMode: CubeViewProjectionMode = 'perspective';
+  private onProjectionModeChange?: (mode: CubeViewProjectionMode) => void;
+  private contextMenu: HTMLDivElement | null = null;
+  private boundContextMenuHandler: ((e: MouseEvent) => void) | null = null;
+  private boundCloseContextMenu: ((e: MouseEvent) => void) | null = null;
+  private boundEscapeHandler: ((e: KeyboardEvent) => void) | null = null;
+  private locale: CubeViewLocale = 'en';
+  private facePlanes: Map<string, Mesh> = new Map();
+  private menuTextElements: Map<string, HTMLElement> = new Map();
 
   constructor(options: CubeViewOptions) {
     const {
@@ -131,19 +157,25 @@ export class CubeView {
       antialias = false,
       onUpdateAngles,
       onOrientationChange,
+      onProjectionModeChange,
+      locale = 'en',
     } = options;
 
     this.canvas = canvas;
     this.cubeSize = cubeSize;
+    this.locale = locale;
     this.onUpdateAngles = onUpdateAngles;
     this.onOrientationChange = onOrientationChange;
+    this.onProjectionModeChange = onProjectionModeChange;
     this.hoverColor = Color3.FromHexString(hoverColor.startsWith('#') ? hoverColor : `#${hoverColor}`);
 
     const effectiveHeight = aspect ? width / aspect : height;
     canvas.width = width;
     canvas.height = effectiveHeight;
+    canvas.classList.add(CUBE_VIEW_CANVAS_CLASS);
 
     this.createContainer(canvas);
+    this.ensureFocusStyles();
 
     this.engine = new Engine(canvas, antialias, { preserveDrawingBuffer: true, stencil: true });
     this.scene = new Scene(this.engine);
@@ -160,7 +192,7 @@ export class CubeView {
       this.scene
     );
     this.camera.upVector = new Vector3(0, 0, 1);
-    this.camera.fov = 50 * Math.PI / 180;
+    this.camera.fov = 20 * Math.PI / 180;
     this.camera.minZ = 0.1;
     this.camera.maxZ = 1000;
     this.camera.lowerRadiusLimit = zoom;
@@ -177,6 +209,7 @@ export class CubeView {
     this.createControllers();
 
     this.setupPointerEvents();
+    this.createContextMenu();
     this.camera.onViewMatrixChangedObservable.add(() => {
       if (this.activeInteractionSource) {
         this.emitOrientationChange('update', this.activeInteractionSource);
@@ -246,6 +279,54 @@ export class CubeView {
         this.homeButton.style.opacity = '0';
       }
     });
+  }
+
+  private ensureFocusStyles() {
+    this.ensureInputModalityTracking();
+
+    if (document.getElementById(CUBE_VIEW_FOCUS_STYLE_ID)) {
+      return;
+    }
+
+    const style = document.createElement('style');
+    style.id = CUBE_VIEW_FOCUS_STYLE_ID;
+    style.textContent = `
+      .${CUBE_VIEW_CANVAS_CLASS}:focus {
+        outline: none;
+      }
+
+      html[${CUBE_VIEW_INPUT_MODALITY_ATTR}="keyboard"] .${CUBE_VIEW_CANVAS_CLASS}:focus {
+        outline: 2px solid rgba(255, 255, 255, 0.9);
+        outline-offset: 2px;
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  private ensureInputModalityTracking() {
+    const root = document.documentElement;
+
+    if (!root.hasAttribute(CUBE_VIEW_INPUT_MODALITY_ATTR)) {
+      root.setAttribute(CUBE_VIEW_INPUT_MODALITY_ATTR, 'pointer');
+    }
+
+    if (root.hasAttribute(CUBE_VIEW_INPUT_TRACKING_ATTR)) {
+      return;
+    }
+
+    root.setAttribute(CUBE_VIEW_INPUT_TRACKING_ATTR, 'true');
+
+    window.addEventListener('pointerdown', () => {
+      root.setAttribute(CUBE_VIEW_INPUT_MODALITY_ATTR, 'pointer');
+    }, true);
+
+    window.addEventListener('keydown', (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      root.setAttribute(CUBE_VIEW_INPUT_MODALITY_ATTR, 'keyboard');
+    }, true);
   }
 
   private createAxes() {
@@ -318,55 +399,83 @@ export class CubeView {
     }
   }
 
-  private createTexturedPlane(size: number, textureData: string, doubleSided: boolean = true): Mesh {
-    const plane = MeshBuilder.CreatePlane('plane', {
-      size,
-      sideOrientation: doubleSided ? Mesh.DOUBLESIDE : Mesh.FRONTSIDE,
-    }, this.scene);
-    const mat = new StandardMaterial('mat', this.scene);
-    mat.diffuseTexture = new Texture(textureData, this.scene);
-    mat.diffuseTexture.hasAlpha = true;
-    mat.useAlphaFromDiffuseTexture = true;
-    mat.emissiveTexture = new Texture(textureData, this.scene);
-    mat.emissiveTexture.hasAlpha = true;
-    mat.disableLighting = true;
-    mat.needDepthPrePass = true;
-    plane.material = mat;
-    plane.isPickable = false;
-    return plane;
+  private createFaceDynamicTexture(text: string): DynamicTexture {
+    const texSize = 256;
+    const dtex = new DynamicTexture(`faceTex_${text}`, texSize, this.scene, true);
+    dtex.hasAlpha = true;
+    this.drawFaceTexture(dtex, text);
+    return dtex;
+  }
+
+  private drawFaceTexture(dtex: DynamicTexture, text: string) {
+    const texSize = 256;
+    const ctx = dtex.getContext();
+    ctx.clearRect(0, 0, texSize, texSize);
+
+    // Background
+    ctx.fillStyle = '#e8e8e8';
+    ctx.fillRect(0, 0, texSize, texSize);
+
+    // Border
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(1.5, 1.5, texSize - 3, texSize - 3);
+
+    // Text
+    const fontSize = text.length <= 2 ? 96 : text.length <= 4 ? 64 : 52;
+    ctx.font = `${fontSize}px Arial, "Microsoft YaHei", sans-serif`;
+    ctx.fillStyle = '#555';
+    (ctx as CanvasRenderingContext2D & { textAlign: string }).textAlign = 'center';
+    (ctx as CanvasRenderingContext2D & { textBaseline: string }).textBaseline = 'middle';
+    ctx.fillText(text, texSize / 2, texSize / 2);
+
+    dtex.update();
   }
 
   private createCubeFaces() {
     const size = this.cubeSize;
     const half = size / 2;
+    const labels = FACE_LABELS[this.locale];
 
-    const top = this.createTexturedPlane(size, texture_top);
-    top.position.z = half;
-    top.rotation.z = Math.PI / 2;
+    const faceConfigs: { key: keyof FaceLabels; px: number; py: number; pz: number; rx: number; ry: number; rz: number }[] = [
+      { key: 'top',    px: 0, py: 0, pz: half,  rx: 0, ry: 0, rz: Math.PI / 2 },
+      { key: 'bottom', px: 0, py: 0, pz: -half, rx: Math.PI, ry: 0, rz: -Math.PI / 2 },
+      { key: 'front',  px: 0, py: -half, pz: 0, rx: Math.PI / 2, ry: 0, rz: 0 },
+      { key: 'back',   px: 0, py: half, pz: 0,  rx: -Math.PI / 2, ry: 0, rz: Math.PI },
+      { key: 'right',  px: half, py: 0, pz: 0,  rx: 0, ry: Math.PI / 2, rz: Math.PI / 2 },
+      { key: 'left',   px: -half, py: 0, pz: 0, rx: 0, ry: -Math.PI / 2, rz: -Math.PI / 2 },
+    ];
 
-    const bottom = this.createTexturedPlane(size, texture_bottom);
-    bottom.position.z = -half;
-    bottom.rotation.x = Math.PI;
-    bottom.rotation.z = -Math.PI / 2;
+    for (const cfg of faceConfigs) {
+      const plane = MeshBuilder.CreatePlane(`face_${cfg.key}`, {
+        size,
+        sideOrientation: Mesh.DOUBLESIDE,
+      }, this.scene);
 
-    const front = this.createTexturedPlane(size, texture_front);
-    front.position.y = -half;
-    front.rotation.x = Math.PI / 2;
+      const dtex = this.createFaceDynamicTexture(labels[cfg.key]);
+      const mat = new StandardMaterial(`faceMat_${cfg.key}`, this.scene);
+      mat.diffuseTexture = dtex;
+      mat.useAlphaFromDiffuseTexture = true;
+      mat.emissiveTexture = dtex;
+      mat.disableLighting = true;
+      mat.needDepthPrePass = true;
+      plane.material = mat;
+      plane.isPickable = false;
 
-    const back = this.createTexturedPlane(size, texture_back);
-    back.position.y = half;
-    back.rotation.x = -Math.PI / 2;
-    back.rotation.z = Math.PI;
+      plane.position.set(cfg.px, cfg.py, cfg.pz);
+      plane.rotation.set(cfg.rx, cfg.ry, cfg.rz);
 
-    const right = this.createTexturedPlane(size, texture_right);
-    right.position.x = half;
-    right.rotation.y = Math.PI / 2;
-    right.rotation.z = Math.PI / 2;
+      this.facePlanes.set(cfg.key, plane);
+    }
+  }
 
-    const left = this.createTexturedPlane(size, texture_left);
-    left.position.x = -half;
-    left.rotation.y = -Math.PI / 2;
-    left.rotation.z = -Math.PI / 2;
+  private updateFaceTextures() {
+    const labels = FACE_LABELS[this.locale];
+    for (const [key, plane] of this.facePlanes) {
+      const mat = plane.material as StandardMaterial;
+      const dtex = mat.diffuseTexture as DynamicTexture;
+      this.drawFaceTexture(dtex, labels[key as keyof FaceLabels]);
+    }
   }
 
   private createControllerBox(
@@ -501,6 +610,7 @@ export class CubeView {
     this.scene.onPointerObservable.add((pointerInfo: PointerInfo) => {
       switch (pointerInfo.type) {
         case PointerEventTypes.POINTERDOWN:
+          if ((pointerInfo.event as PointerEvent).button !== 0) break;
           this.pointerDownPosition = {
             x: this.scene.pointerX,
             y: this.scene.pointerY,
@@ -524,7 +634,7 @@ export class CubeView {
         case PointerEventTypes.POINTERUP:
           if (this.isDragging) {
             this.endInteraction();
-          } else if (this.intersected) {
+          } else if (this.pointerDownPosition && this.intersected) {
             this.handleClick(this.intersected.name);
           }
           this.pointerDownPosition = null;
@@ -536,6 +646,120 @@ export class CubeView {
     this.scene.registerBeforeRender(() => {
       this.handleHover();
     });
+  }
+
+  private createContextMenu() {
+    this.contextMenu = document.createElement('div');
+    this.contextMenu.style.cssText = `
+      display: none;
+      position: fixed;
+      z-index: 10000;
+      min-width: 120px;
+      background: #2b2b2b;
+      border: 1px solid #555;
+      border-radius: 4px;
+      padding: 4px 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 12px;
+      color: #ddd;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      user-select: none;
+    `;
+
+    const menuLabels = MENU_LABELS[this.locale];
+    const modes: { mode: CubeViewProjectionMode }[] = [
+      { mode: 'perspective' },
+      { mode: 'orthographic' },
+    ];
+
+    for (const { mode } of modes) {
+      const item = document.createElement('div');
+      item.dataset.mode = mode;
+      item.style.cssText = `
+        padding: 6px 12px 6px 28px;
+        cursor: pointer;
+        position: relative;
+        white-space: nowrap;
+      `;
+
+      const checkmark = document.createElement('span');
+      checkmark.style.cssText = `
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+      `;
+
+      const text = document.createElement('span');
+      text.textContent = menuLabels[mode];
+      this.menuTextElements.set(mode, text);
+
+      item.appendChild(checkmark);
+      item.appendChild(text);
+
+      item.addEventListener('mouseover', () => {
+        item.style.background = '#3a3a3a';
+      });
+      item.addEventListener('mouseout', () => {
+        item.style.background = 'transparent';
+      });
+      item.addEventListener('click', () => {
+        this.setProjectionMode(mode);
+        this.hideContextMenu();
+      });
+
+      this.contextMenu.appendChild(item);
+    }
+
+    document.body.appendChild(this.contextMenu);
+
+    this.boundContextMenuHandler = (e: MouseEvent) => {
+      e.preventDefault();
+      this.showContextMenu(e.clientX, e.clientY);
+    };
+    this.canvas.addEventListener('contextmenu', this.boundContextMenuHandler);
+
+    this.boundCloseContextMenu = (e: MouseEvent) => {
+      if (this.contextMenu && this.contextMenu.style.display !== 'none' &&
+          !this.contextMenu.contains(e.target as Node)) {
+        this.hideContextMenu();
+      }
+    };
+    document.addEventListener('mousedown', this.boundCloseContextMenu, true);
+
+    this.boundEscapeHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') this.hideContextMenu();
+    };
+    document.addEventListener('keydown', this.boundEscapeHandler);
+  }
+
+  private showContextMenu(x: number, y: number) {
+    if (!this.contextMenu) return;
+
+    const items = this.contextMenu.querySelectorAll<HTMLElement>('[data-mode]');
+    items.forEach((item) => {
+      const checkmark = item.firstElementChild as HTMLElement;
+      if (checkmark) {
+        checkmark.textContent = item.dataset.mode === this.projectionMode ? '✓' : '';
+      }
+    });
+
+    this.contextMenu.style.left = '-9999px';
+    this.contextMenu.style.top = '-9999px';
+    this.contextMenu.style.display = 'block';
+
+    const rect = this.contextMenu.getBoundingClientRect();
+    const menuX = x + rect.width > window.innerWidth ? x - rect.width : x;
+    const menuY = y + rect.height > window.innerHeight ? y - rect.height : y;
+
+    this.contextMenu.style.left = `${Math.max(0, menuX)}px`;
+    this.contextMenu.style.top = `${Math.max(0, menuY)}px`;
+  }
+
+  private hideContextMenu() {
+    if (this.contextMenu) {
+      this.contextMenu.style.display = 'none';
+    }
   }
 
   private handleHover() {
@@ -724,6 +948,36 @@ export class CubeView {
     this.setOrientation({ alpha, beta });
   }
 
+  getLocale(): CubeViewLocale {
+    return this.locale;
+  }
+
+  setLocale(locale: CubeViewLocale) {
+    if (this.locale === locale) return;
+    this.locale = locale;
+    this.updateFaceTextures();
+    this.updateContextMenuLabels();
+  }
+
+  private updateContextMenuLabels() {
+    const menuLabels = MENU_LABELS[this.locale];
+    for (const [mode, el] of this.menuTextElements) {
+      el.textContent = menuLabels[mode as keyof typeof menuLabels];
+    }
+  }
+
+  getProjectionMode(): CubeViewProjectionMode {
+    return this.projectionMode;
+  }
+
+  setProjectionMode(mode: CubeViewProjectionMode) {
+    if (this.projectionMode === mode) return;
+    this.projectionMode = mode;
+    if (this.onProjectionModeChange) {
+      this.onProjectionModeChange(mode);
+    }
+  }
+
   resize(width: number, height: number, aspect?: number) {
     const effectiveHeight = aspect ? width / aspect : height;
     this.canvas.width = width;
@@ -739,6 +993,19 @@ export class CubeView {
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
     }
+    if (this.boundContextMenuHandler) {
+      this.canvas.removeEventListener('contextmenu', this.boundContextMenuHandler);
+    }
+    if (this.boundCloseContextMenu) {
+      document.removeEventListener('mousedown', this.boundCloseContextMenu, true);
+    }
+    if (this.boundEscapeHandler) {
+      document.removeEventListener('keydown', this.boundEscapeHandler);
+    }
+    if (this.contextMenu && this.contextMenu.parentNode) {
+      this.contextMenu.parentNode.removeChild(this.contextMenu);
+    }
+
     this.engine.stopRenderLoop();
     this.scene.dispose();
     this.engine.dispose();

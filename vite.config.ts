@@ -9,6 +9,11 @@ export default defineConfig({
     },
     rollupOptions: {
       external: ['@babylonjs/core'],
+      output: {
+        globals: {
+          '@babylonjs/core': 'BABYLON',
+        },
+      },
     },
   },
 });

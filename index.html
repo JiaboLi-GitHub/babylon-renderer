@@ -14,17 +14,33 @@
       right: 10px;
       z-index: 10;
     }
+    #langBtn {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      padding: 6px 14px;
+      background: rgba(40, 40, 40, 0.8);
+      color: #ddd;
+      border: 1px solid #555;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    #langBtn:hover { background: rgba(60, 60, 60, 0.9); }
   </style>
 </head>
 <body>
   <canvas id="mainCanvas"></canvas>
+  <button id="langBtn">中文</button>
   <div id="cubeViewWrapper">
     <canvas id="cubeViewCanvas" width="150" height="150"></canvas>
   </div>
 
   <script type="module">
     import {
-      Engine, Scene, ArcRotateCamera, Vector3, HemisphericLight,
+      Engine, Scene, ArcRotateCamera, Camera, Vector3, HemisphericLight,
       MeshBuilder, StandardMaterial, Color3, Color4
     } from '@babylonjs/core';
     import { GridMaterial } from '@babylonjs/materials';
@@ -82,8 +98,22 @@
       aspect: 1,
       hoverColor: '#0088ff',
       cubeSize: 2,
-      zoom: 6,
+      zoom: 16,
       antialias: true,
+      onProjectionModeChange: (mode) => {
+        if (mode === 'orthographic') {
+          const halfHeight = camera.radius * Math.tan(camera.fov / 2);
+          const aspect = engine.getAspectRatio(camera);
+          const halfWidth = halfHeight * aspect;
+          camera.mode = Camera.ORTHOGRAPHIC_CAMERA;
+          camera.orthoTop = halfHeight;
+          camera.orthoBottom = -halfHeight;
+          camera.orthoLeft = -halfWidth;
+          camera.orthoRight = halfWidth;
+        } else {
+          camera.mode = Camera.PERSPECTIVE_CAMERA;
+        }
+      },
       onOrientationChange: ({ orientation, phase }) => {
         if (phase === 'start') {
           cubeViewDriving = true;
@@ -106,11 +136,32 @@
           beta: camera.beta,
         });
       }
+      if (camera.mode === Camera.ORTHOGRAPHIC_CAMERA) {
+        const halfHeight = camera.radius * Math.tan(camera.fov / 2);
+        const aspect = engine.getAspectRatio(camera);
+        const halfWidth = halfHeight * aspect;
+        camera.orthoTop = halfHeight;
+        camera.orthoBottom = -halfHeight;
+        camera.orthoLeft = -halfWidth;
+        camera.orthoRight = halfWidth;
+      }
     });
 
     cubeView.setOrientation({
       alpha: camera.alpha,
       beta: camera.beta,
+    });
+
+    // Expose for e2e tests
+    window.cubeView = cubeView;
+
+    // Language toggle
+    const langBtn = document.getElementById('langBtn');
+    langBtn.addEventListener('click', () => {
+      const current = cubeView.getLocale();
+      const next = current === 'en' ? 'zh' : 'en';
+      cubeView.setLocale(next);
+      langBtn.textContent = next === 'en' ? '中文' : 'EN';
     });
   </script>
 </body>

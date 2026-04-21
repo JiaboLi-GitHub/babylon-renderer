@@ -5,4 +5,6 @@ export type {
   CubeViewOptions,
   CubeViewOrientation,
   CubeViewOrientationChangeEvent,
+  CubeViewProjectionMode,
+  CubeViewLocale,
 } from './CubeView';
