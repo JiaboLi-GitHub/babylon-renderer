@@ -51,11 +51,13 @@
     import { CubeView } from './src/index.ts';
 
     const gridConfig = {
-      size: 20,
-      step: 0.4,
-      majorStep: 2,
       elevation: 0,
       coordinateScale: 25,
+      halfRangeValue: 350,
+      targetMajorPixelSpacing: 80,
+      minorPerMajor: 2,
+      minMajorValueStep: 25,
+      maxMajorValueStep: 500,
     };
 
     // --- Main Scene ---
@@ -65,66 +67,111 @@
     scene.clearColor = new Color4(1, 1, 1, 1);
     scene.useRightHandedSystem = true;
 
-    function createGridLineMap(scene, {
-      size = 20,
-      step = 0.4,
-      majorStep = 2,
-      elevation = 0,
-    } = {}) {
-      const half = size / 2;
+    function isMultipleOf(value, interval) {
+      return Math.abs(value / interval - Math.round(value / interval)) < 1e-6;
+    }
+
+    const gridMeshes = {
+      minor: null,
+      major: null,
+      border: null,
+      xAxis: null,
+      yAxis: null,
+      signature: null,
+    };
+
+    function disposeMesh(mesh) {
+      if (mesh) {
+        mesh.dispose();
+      }
+    }
+
+    function rebuildGridMeshes(scene, state, elevation) {
+      disposeMesh(gridMeshes.minor);
+      disposeMesh(gridMeshes.major);
+      disposeMesh(gridMeshes.border);
+      disposeMesh(gridMeshes.xAxis);
+      disposeMesh(gridMeshes.yAxis);
+
+      const halfWorld = state.halfRangeWorld;
       const minorLines = [];
       const majorLines = [];
       const axisHeight = elevation + 0.01;
 
-      const isMultipleOf = (value, interval) =>
-        Math.abs(value / interval - Math.round(value / interval)) < 1e-6;
-
-      for (let value = -half; value <= half + 1e-6; value += step) {
+      for (const value of getSteppedGridValues(state.halfRangeValue, state.minorValueStep)) {
         const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
-        const isMajor = isMultipleOf(snappedValue, majorStep);
+        const worldValue = snappedValue / state.coordinateScale;
+        const isMajor = isMultipleOf(snappedValue, state.majorValueStep);
         const target = isMajor ? majorLines : minorLines;
 
         target.push([
-          new Vector3(-half, snappedValue, elevation),
-          new Vector3(half, snappedValue, elevation),
+          new Vector3(-halfWorld, worldValue, elevation),
+          new Vector3(halfWorld, worldValue, elevation),
         ]);
         target.push([
-          new Vector3(snappedValue, -half, elevation),
-          new Vector3(snappedValue, half, elevation),
+          new Vector3(worldValue, -halfWorld, elevation),
+          new Vector3(worldValue, halfWorld, elevation),
         ]);
       }
 
-      const minorGrid = MeshBuilder.CreateLineSystem('minorGrid', {
+      gridMeshes.minor = MeshBuilder.CreateLineSystem('minorGrid', {
         lines: minorLines,
         updatable: false,
       }, scene);
-      minorGrid.color = new Color3(0.9, 0.9, 0.9);
-      minorGrid.isPickable = false;
+      gridMeshes.minor.color = new Color3(0.9, 0.9, 0.9);
+      gridMeshes.minor.isPickable = false;
 
-      const majorGrid = MeshBuilder.CreateLineSystem('majorGrid', {
+      gridMeshes.major = MeshBuilder.CreateLineSystem('majorGrid', {
         lines: majorLines,
         updatable: false,
       }, scene);
-      majorGrid.color = new Color3(0.75, 0.75, 0.75);
-      majorGrid.isPickable = false;
+      gridMeshes.major.color = new Color3(0.75, 0.75, 0.75);
+      gridMeshes.major.isPickable = false;
 
-      const xAxis = MeshBuilder.CreateLines('gridXAxis', {
+      gridMeshes.border = MeshBuilder.CreateLines('gridBorder', {
         points: [
-          new Vector3(-half, 0, axisHeight),
-          new Vector3(half, 0, axisHeight),
+          new Vector3(-halfWorld, -halfWorld, axisHeight),
+          new Vector3(-halfWorld, halfWorld, axisHeight),
+          new Vector3(halfWorld, halfWorld, axisHeight),
+          new Vector3(halfWorld, -halfWorld, axisHeight),
+          new Vector3(-halfWorld, -halfWorld, axisHeight),
         ],
       }, scene);
-      xAxis.color = new Color3(0.74, 0.96, 0.74);
-      xAxis.isPickable = false;
+      gridMeshes.border.color = new Color3(0.6, 0.6, 0.6);
+      gridMeshes.border.isPickable = false;
 
-      const yAxis = MeshBuilder.CreateLines('gridYAxis', {
+      gridMeshes.xAxis = MeshBuilder.CreateLines('gridXAxis', {
         points: [
-          new Vector3(0, -half, axisHeight),
-          new Vector3(0, half, axisHeight),
+          new Vector3(-halfWorld, 0, axisHeight),
+          new Vector3(halfWorld, 0, axisHeight),
         ],
       }, scene);
-      yAxis.color = new Color3(1, 0.58, 0.58);
-      yAxis.isPickable = false;
+      gridMeshes.xAxis.color = new Color3(0.74, 0.96, 0.74);
+      gridMeshes.xAxis.isPickable = false;
+
+      gridMeshes.yAxis = MeshBuilder.CreateLines('gridYAxis', {
+        points: [
+          new Vector3(0, -halfWorld, axisHeight),
+          new Vector3(0, halfWorld, axisHeight),
+        ],
+      }, scene);
+      gridMeshes.yAxis.color = new Color3(1, 0.58, 0.58);
+      gridMeshes.yAxis.isPickable = false;
+    }
+
+    function syncGridMeshes(scene, state, elevation) {
+      const signature = [
+        state.halfRangeWorld.toFixed(4),
+        state.minorWorldStep.toFixed(4),
+        state.majorWorldStep.toFixed(4),
+      ].join('|');
+
+      if (gridMeshes.signature === signature) {
+        return;
+      }
+
+      rebuildGridMeshes(scene, state, elevation);
+      gridMeshes.signature = signature;
     }
 
     function projectToScreen(scene, camera, point) {
@@ -137,8 +184,7 @@
     }
 
     function applyOrthographicBounds(camera) {
-      const minimumHalfHeight = gridConfig.size / 2 + gridConfig.majorStep * 0.5;
-      const halfHeight = Math.max(minimumHalfHeight, camera.radius * Math.tan(camera.fov / 2));
+      const halfHeight = Math.max(0.25, camera.radius * Math.tan(camera.fov / 2));
       const aspect = engine.getAspectRatio(camera);
       const halfWidth = halfHeight * aspect;
 
@@ -148,8 +194,41 @@
       camera.orthoRight = halfWidth;
     }
 
-    function getProjectedGridBoundaries(scene, camera, size, elevation) {
-      const half = size / 2;
+    function getSteppedGridValues(halfRangeValue, stepValue, includeBoundaries = false) {
+      if (!Number.isFinite(stepValue) || stepValue <= 0) {
+        return [0];
+      }
+
+      const values = [];
+      const epsilon = 1e-6;
+      const start = Math.ceil((-halfRangeValue - epsilon) / stepValue) * stepValue;
+      const end = Math.floor((halfRangeValue + epsilon) / stepValue) * stepValue;
+
+      for (let value = start; value <= end + epsilon; value += stepValue) {
+        const snappedValue = Math.abs(value) < epsilon ? 0 : Number(value.toFixed(6));
+        if (Math.abs(snappedValue) <= halfRangeValue + epsilon) {
+          values.push(snappedValue);
+        }
+      }
+
+      if (!includeBoundaries) {
+        return values;
+      }
+
+      const negativeBoundary = -halfRangeValue;
+      const positiveBoundary = halfRangeValue;
+      if (!values.some((value) => Math.abs(value - negativeBoundary) < epsilon)) {
+        values.unshift(negativeBoundary);
+      }
+      if (!values.some((value) => Math.abs(value - positiveBoundary) < epsilon)) {
+        values.push(positiveBoundary);
+      }
+
+      return values;
+    }
+
+    function getProjectedGridBoundaries(scene, camera, halfRangeWorld, elevation) {
+      const half = halfRangeWorld;
       const positiveY = projectToScreen(scene, camera, new Vector3(0, half, elevation));
       const negativeY = projectToScreen(scene, camera, new Vector3(0, -half, elevation));
       const positiveX = projectToScreen(scene, camera, new Vector3(half, 0, elevation));
@@ -199,8 +278,8 @@
     }
 
     const gridLabelMeshes = {
-      right: { valueStep: null, entries: [] },
-      bottom: { valueStep: null, entries: [] },
+      right: { signature: null, entries: [] },
+      bottom: { signature: null, entries: [] },
     };
 
     function disposeGridLabelEntries(entries) {
@@ -212,110 +291,101 @@
       }
     }
 
-    function buildGridLabelEntries(axis, valueStep, {
-      size,
-      coordinateScale,
-    }) {
-      const half = size / 2;
-      const worldStep = valueStep / coordinateScale;
+    function buildGridLabelEntries(axis, state, config) {
       const entries = [];
 
-      for (let value = -half; value <= half + 1e-6; value += worldStep) {
+      for (const value of getSteppedGridValues(state.halfRangeValue, state.majorValueStep, true)) {
         const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
-        const labelText = `${Math.round(Math.abs(snappedValue * coordinateScale))}`;
+        const labelText = `${Math.round(Math.abs(snappedValue))}`;
         const rotationZ = axis === 'right' ? Math.PI / 2 : 0;
 
         entries.push({
-          value: snappedValue,
-          mesh: createGridLabelMesh(`grid_${axis}_${valueStep}_${snappedValue}`, labelText, rotationZ),
+          value: snappedValue / config.coordinateScale,
+          mesh: createGridLabelMesh(
+            `grid_${axis}_${state.majorValueStep}_${state.halfRangeWorld}_${snappedValue}`,
+            labelText,
+            rotationZ,
+          ),
         });
       }
 
       return entries;
     }
 
-    function getAdaptiveCoordinateValueStep(pixelSpacing, {
-      coordinateScale,
-      size,
-      step,
-    }) {
-      const baseValueStep = Math.max(1, Math.round(step * coordinateScale));
-      const maxValueStep = Math.max(baseValueStep, Math.round((size / 2) * coordinateScale));
-      const targetPixelSpacing = 70;
-
-      if (!Number.isFinite(pixelSpacing) || pixelSpacing <= 0.5) {
-        return maxValueStep;
+    function getNiceCeilStep(value) {
+      if (!Number.isFinite(value) || value <= 0) {
+        return 1;
       }
 
-      const candidateSteps = [];
-      let magnitude = 1;
-      while (baseValueStep * magnitude <= maxValueStep * 10) {
-        for (const factor of [1, 2, 5]) {
-          candidateSteps.push(baseValueStep * magnitude * factor);
-        }
-        magnitude *= 10;
-      }
+      const exponent = Math.floor(Math.log10(value));
+      const magnitude = 10 ** exponent;
+      const normalized = value / magnitude;
 
-      for (const candidate of candidateSteps) {
-        if (pixelSpacing * (candidate / baseValueStep) >= targetPixelSpacing) {
-          return Math.min(candidate, maxValueStep);
+      for (const factor of [1, 2, 2.5, 5, 10]) {
+        if (normalized <= factor) {
+          return factor * magnitude;
         }
       }
 
-      return maxValueStep;
+      return 10 * magnitude;
     }
 
-    function getAdaptiveCoordinateState(scene, camera, {
-      size,
-      step,
-      elevation,
-      coordinateScale,
-    }) {
-      const { rightY, bottomX } = getProjectedGridBoundaries(scene, camera, size, elevation);
-      const baseRightStart = projectToScreen(scene, camera, new Vector3(0, rightY, elevation));
-      const baseRightNext = projectToScreen(scene, camera, new Vector3(step, rightY, elevation));
-      const baseBottomStart = projectToScreen(scene, camera, new Vector3(bottomX, 0, elevation));
-      const baseBottomNext = projectToScreen(scene, camera, new Vector3(bottomX, step, elevation));
-
-      const rightPixelSpacing = Math.hypot(
-        baseRightNext.x - baseRightStart.x,
-        baseRightNext.y - baseRightStart.y,
+    function getAdaptiveGridState(scene, camera, config) {
+      const unitWorldStep = 1 / config.coordinateScale;
+      const origin = projectToScreen(scene, camera, new Vector3(0, 0, config.elevation));
+      const xUnit = projectToScreen(scene, camera, new Vector3(unitWorldStep, 0, config.elevation));
+      const yUnit = projectToScreen(scene, camera, new Vector3(0, unitWorldStep, config.elevation));
+      const pixelPerValueUnit = Math.max(
+        1e-4,
+        (Math.hypot(xUnit.x - origin.x, xUnit.y - origin.y) +
+          Math.hypot(yUnit.x - origin.x, yUnit.y - origin.y)) / 2,
       );
-      const bottomPixelSpacing = Math.hypot(
-        baseBottomNext.x - baseBottomStart.x,
-        baseBottomNext.y - baseBottomStart.y,
+      const roughMajorValueStep = config.targetMajorPixelSpacing / pixelPerValueUnit;
+      const majorValueStep = Math.min(
+        config.maxMajorValueStep,
+        Math.max(config.minMajorValueStep, getNiceCeilStep(roughMajorValueStep)),
       );
+      const minorValueStep = majorValueStep / config.minorPerMajor;
+      const halfRangeValue = config.halfRangeValue;
+      const halfRangeWorld = halfRangeValue / config.coordinateScale;
 
       return {
-        rightY,
-        bottomX,
-        rightValueStep: getAdaptiveCoordinateValueStep(rightPixelSpacing, { coordinateScale, size, step }),
-        bottomValueStep: getAdaptiveCoordinateValueStep(bottomPixelSpacing, { coordinateScale, size, step }),
+        coordinateScale: config.coordinateScale,
+        halfRangeValue,
+        halfRangeWorld,
+        size: halfRangeWorld * 2,
+        majorValueStep,
+        minorValueStep,
+        majorWorldStep: majorValueStep / config.coordinateScale,
+        minorWorldStep: minorValueStep / config.coordinateScale,
       };
     }
 
-    function ensureGridCoordinateMeshes(config, adaptiveState) {
+    function ensureGridCoordinateMeshes(state, config) {
       for (const axis of ['right', 'bottom']) {
-        const valueStep = adaptiveState[`${axis}ValueStep`];
-        if (gridLabelMeshes[axis].valueStep === valueStep) {
+        const signature = `${state.halfRangeWorld.toFixed(4)}|${state.majorValueStep}`;
+        if (gridLabelMeshes[axis].signature === signature) {
           continue;
         }
 
         disposeGridLabelEntries(gridLabelMeshes[axis].entries);
-        gridLabelMeshes[axis].entries = buildGridLabelEntries(axis, valueStep, config);
-        gridLabelMeshes[axis].valueStep = valueStep;
+        gridLabelMeshes[axis].entries = buildGridLabelEntries(axis, state, config);
+        gridLabelMeshes[axis].signature = signature;
       }
     }
 
     // Coordinate labels are real scene meshes attached to the projected outer grid edges.
-    function updateGridCoordinateMeshes(scene, camera, config) {
-      const adaptiveState = getAdaptiveCoordinateState(scene, camera, config);
-      ensureGridCoordinateMeshes(config, adaptiveState);
+    function updateGridCoordinateMeshes(scene, camera, state, config) {
+      ensureGridCoordinateMeshes(state, config);
 
-      const { size, elevation } = config;
-      const labelHeight = elevation + 0.03;
-      const worldOffset = Math.max(gridConfig.step * 0.8, 0.28);
-      const { rightY, bottomX } = adaptiveState;
+      const labelHeight = config.elevation + 0.03;
+      const worldOffset = Math.min(Math.max(state.minorWorldStep * 0.4, 0.16), 0.42);
+      const { rightY, bottomX } = getProjectedGridBoundaries(
+        scene,
+        camera,
+        state.halfRangeWorld,
+        config.elevation,
+      );
       const rightYDirection = Math.sign(rightY) || 1;
       const bottomXDirection = Math.sign(bottomX) || 1;
       const rightRotation = rightYDirection > 0 ? Math.PI / 2 : -Math.PI / 2;
@@ -330,6 +400,12 @@
         label.mesh.position.set(bottomX + bottomXDirection * worldOffset, label.value, labelHeight);
         label.mesh.rotation.z = bottomRotation;
       }
+    }
+
+    function updateAdaptiveGrid(scene, camera, config) {
+      const state = getAdaptiveGridState(scene, camera, config);
+      syncGridMeshes(scene, state, config.elevation);
+      updateGridCoordinateMeshes(scene, camera, state, config);
     }
 
     // Z-up camera
@@ -347,9 +423,6 @@
     const light = new HemisphericLight('light', new Vector3(0.3, -0.5, 1), scene);
     light.intensity = 0.9;
 
-    // Ground grid (XY plane at Z=0 for Z-up)
-    createGridLineMap(scene, gridConfig);
-
     // Simple cube
     const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
     box.position.z = 1;
@@ -358,7 +431,7 @@
     box.material = boxMat;
 
     engine.runRenderLoop(() => {
-      updateGridCoordinateMeshes(scene, camera, gridConfig);
+      updateAdaptiveGrid(scene, camera, gridConfig);
       scene.render();
     });
     window.addEventListener('resize', () => engine.resize());
