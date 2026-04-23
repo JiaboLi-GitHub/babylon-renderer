@@ -34,11 +34,66 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     #langBtn:hover { background: rgba(60, 60, 60, 0.9); }
+    #ioToolbar {
+      position: absolute;
+      top: 10px;
+      left: 92px;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+      backdrop-filter: blur(8px);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: #333;
+    }
+    .toolbar-button {
+      padding: 6px 12px;
+      background: #1f2937;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 160ms ease, opacity 160ms ease;
+    }
+    .toolbar-button:hover { background: #111827; }
+    .toolbar-button.secondary {
+      background: #475569;
+    }
+    .toolbar-button.secondary:hover {
+      background: #334155;
+    }
+    .toolbar-button:disabled,
+    .toolbar-button.is-disabled {
+      cursor: wait;
+      opacity: 0.55;
+    }
+    #stepFileInput {
+      display: none;
+    }
+    #ioStatus {
+      min-width: 220px;
+      font-size: 12px;
+      color: #475569;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
   <canvas id="mainCanvas"></canvas>
   <button id="langBtn">中文</button>
+  <div id="ioToolbar">
+    <label id="stepImportLabel" class="toolbar-button" for="stepFileInput">Load STEP</label>
+    <input id="stepFileInput" type="file" accept=".step,.stp">
+    <button id="stepExportBtn" class="toolbar-button secondary" type="button">Export STEP</button>
+    <span id="ioStatus">Ready.</span>
+  </div>
   <div id="cubeViewWrapper">
     <canvas id="cubeViewCanvas" width="150" height="150"></canvas>
   </div>
@@ -46,19 +101,10 @@
   <script type="module">
     import {
       Engine, Scene, ArcRotateCamera, Camera, Vector3, HemisphericLight,
-      Matrix, MeshBuilder, StandardMaterial, Color3, Color4, DynamicTexture,
+      MeshBuilder, StandardMaterial, Color3, Color4, TransformNode,
     } from '@babylonjs/core';
-    import { CubeView } from './src/index.ts';
-
-    const gridConfig = {
-      elevation: 0,
-      coordinateScale: 25,
-      halfRangeValue: 350,
-      targetMajorPixelSpacing: 80,
-      minorPerMajor: 2,
-      minMajorValueStep: 25,
-      maxMajorValueStep: 500,
-    };
+    import { CubeView, GridMap } from './src/index.ts';
+    import { loadStepModel, exportMeshesToStep } from './src/stepModelIO.js';
 
     // --- Main Scene ---
     const mainCanvas = document.getElementById('mainCanvas');
@@ -66,122 +112,6 @@
     const scene = new Scene(engine);
     scene.clearColor = new Color4(1, 1, 1, 1);
     scene.useRightHandedSystem = true;
-
-    function isMultipleOf(value, interval) {
-      return Math.abs(value / interval - Math.round(value / interval)) < 1e-6;
-    }
-
-    const gridMeshes = {
-      minor: null,
-      major: null,
-      border: null,
-      xAxis: null,
-      yAxis: null,
-      signature: null,
-    };
-
-    function disposeMesh(mesh) {
-      if (mesh) {
-        mesh.dispose();
-      }
-    }
-
-    function rebuildGridMeshes(scene, state, elevation) {
-      disposeMesh(gridMeshes.minor);
-      disposeMesh(gridMeshes.major);
-      disposeMesh(gridMeshes.border);
-      disposeMesh(gridMeshes.xAxis);
-      disposeMesh(gridMeshes.yAxis);
-
-      const halfWorld = state.halfRangeWorld;
-      const minorLines = [];
-      const majorLines = [];
-      const axisHeight = elevation + 0.01;
-
-      for (const value of getSteppedGridValues(state.halfRangeValue, state.minorValueStep)) {
-        const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
-        const worldValue = snappedValue / state.coordinateScale;
-        const isMajor = isMultipleOf(snappedValue, state.majorValueStep);
-        const target = isMajor ? majorLines : minorLines;
-
-        target.push([
-          new Vector3(-halfWorld, worldValue, elevation),
-          new Vector3(halfWorld, worldValue, elevation),
-        ]);
-        target.push([
-          new Vector3(worldValue, -halfWorld, elevation),
-          new Vector3(worldValue, halfWorld, elevation),
-        ]);
-      }
-
-      gridMeshes.minor = MeshBuilder.CreateLineSystem('minorGrid', {
-        lines: minorLines,
-        updatable: false,
-      }, scene);
-      gridMeshes.minor.color = new Color3(0.9, 0.9, 0.9);
-      gridMeshes.minor.isPickable = false;
-
-      gridMeshes.major = MeshBuilder.CreateLineSystem('majorGrid', {
-        lines: majorLines,
-        updatable: false,
-      }, scene);
-      gridMeshes.major.color = new Color3(0.75, 0.75, 0.75);
-      gridMeshes.major.isPickable = false;
-
-      gridMeshes.border = MeshBuilder.CreateLines('gridBorder', {
-        points: [
-          new Vector3(-halfWorld, -halfWorld, axisHeight),
-          new Vector3(-halfWorld, halfWorld, axisHeight),
-          new Vector3(halfWorld, halfWorld, axisHeight),
-          new Vector3(halfWorld, -halfWorld, axisHeight),
-          new Vector3(-halfWorld, -halfWorld, axisHeight),
-        ],
-      }, scene);
-      gridMeshes.border.color = new Color3(0.6, 0.6, 0.6);
-      gridMeshes.border.isPickable = false;
-
-      gridMeshes.xAxis = MeshBuilder.CreateLines('gridXAxis', {
-        points: [
-          new Vector3(-halfWorld, 0, axisHeight),
-          new Vector3(halfWorld, 0, axisHeight),
-        ],
-      }, scene);
-      gridMeshes.xAxis.color = new Color3(0.74, 0.96, 0.74);
-      gridMeshes.xAxis.isPickable = false;
-
-      gridMeshes.yAxis = MeshBuilder.CreateLines('gridYAxis', {
-        points: [
-          new Vector3(0, -halfWorld, axisHeight),
-          new Vector3(0, halfWorld, axisHeight),
-        ],
-      }, scene);
-      gridMeshes.yAxis.color = new Color3(1, 0.58, 0.58);
-      gridMeshes.yAxis.isPickable = false;
-    }
-
-    function syncGridMeshes(scene, state, elevation) {
-      const signature = [
-        state.halfRangeWorld.toFixed(4),
-        state.minorWorldStep.toFixed(4),
-        state.majorWorldStep.toFixed(4),
-      ].join('|');
-
-      if (gridMeshes.signature === signature) {
-        return;
-      }
-
-      rebuildGridMeshes(scene, state, elevation);
-      gridMeshes.signature = signature;
-    }
-
-    function projectToScreen(scene, camera, point) {
-      return Vector3.Project(
-        point,
-        Matrix.IdentityReadOnly,
-        scene.getTransformMatrix(),
-        camera.viewport.toGlobal(mainCanvas.clientWidth, mainCanvas.clientHeight),
-      );
-    }
 
     function applyOrthographicBounds(camera) {
       const halfHeight = Math.max(0.25, camera.radius * Math.tan(camera.fov / 2));
@@ -192,220 +122,6 @@
       camera.orthoBottom = -halfHeight;
       camera.orthoLeft = -halfWidth;
       camera.orthoRight = halfWidth;
-    }
-
-    function getSteppedGridValues(halfRangeValue, stepValue, includeBoundaries = false) {
-      if (!Number.isFinite(stepValue) || stepValue <= 0) {
-        return [0];
-      }
-
-      const values = [];
-      const epsilon = 1e-6;
-      const start = Math.ceil((-halfRangeValue - epsilon) / stepValue) * stepValue;
-      const end = Math.floor((halfRangeValue + epsilon) / stepValue) * stepValue;
-
-      for (let value = start; value <= end + epsilon; value += stepValue) {
-        const snappedValue = Math.abs(value) < epsilon ? 0 : Number(value.toFixed(6));
-        if (Math.abs(snappedValue) <= halfRangeValue + epsilon) {
-          values.push(snappedValue);
-        }
-      }
-
-      if (!includeBoundaries) {
-        return values;
-      }
-
-      const negativeBoundary = -halfRangeValue;
-      const positiveBoundary = halfRangeValue;
-      if (!values.some((value) => Math.abs(value - negativeBoundary) < epsilon)) {
-        values.unshift(negativeBoundary);
-      }
-      if (!values.some((value) => Math.abs(value - positiveBoundary) < epsilon)) {
-        values.push(positiveBoundary);
-      }
-
-      return values;
-    }
-
-    function getProjectedGridBoundaries(scene, camera, halfRangeWorld, elevation) {
-      const half = halfRangeWorld;
-      const positiveY = projectToScreen(scene, camera, new Vector3(0, half, elevation));
-      const negativeY = projectToScreen(scene, camera, new Vector3(0, -half, elevation));
-      const positiveX = projectToScreen(scene, camera, new Vector3(half, 0, elevation));
-      const negativeX = projectToScreen(scene, camera, new Vector3(-half, 0, elevation));
-
-      return {
-        rightY: positiveY.x >= negativeY.x ? half : -half,
-        bottomX: positiveX.y >= negativeX.y ? half : -half,
-      };
-    }
-
-    function createGridLabelMesh(name, text, rotationZ = 0) {
-      const width = Math.max(1.1, text.length * 0.36 + 0.4);
-      const height = 0.58;
-      const plane = MeshBuilder.CreatePlane(name, { width, height }, scene);
-      const textureWidth = 512;
-      const textureHeight = 256;
-      const texture = new DynamicTexture(`${name}_texture`, {
-        width: textureWidth,
-        height: textureHeight,
-      }, scene, true);
-      const ctx = texture.getContext();
-
-      ctx.clearRect(0, 0, textureWidth, textureHeight);
-      ctx.font = '400 100px "Segoe UI", "Microsoft YaHei", sans-serif';
-      ctx.fillStyle = '#9d9d9d';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(text, textureWidth / 2, textureHeight / 2);
-
-      texture.hasAlpha = true;
-      texture.update();
-
-      const material = new StandardMaterial(`${name}_material`, scene);
-      material.diffuseTexture = texture;
-      material.emissiveTexture = texture;
-      material.useAlphaFromDiffuseTexture = true;
-      material.disableLighting = true;
-      material.backFaceCulling = false;
-
-      plane.material = material;
-      plane.rotation.z = rotationZ;
-      plane.isPickable = false;
-      plane.renderingGroupId = 1;
-
-      return plane;
-    }
-
-    const gridLabelMeshes = {
-      right: { signature: null, entries: [] },
-      bottom: { signature: null, entries: [] },
-    };
-
-    function disposeGridLabelEntries(entries) {
-      for (const entry of entries) {
-        if (entry.mesh.material) {
-          entry.mesh.material.dispose(false, true);
-        }
-        entry.mesh.dispose();
-      }
-    }
-
-    function buildGridLabelEntries(axis, state, config) {
-      const entries = [];
-
-      for (const value of getSteppedGridValues(state.halfRangeValue, state.majorValueStep, true)) {
-        const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
-        const labelText = `${Math.round(Math.abs(snappedValue))}`;
-        const rotationZ = axis === 'right' ? Math.PI / 2 : 0;
-
-        entries.push({
-          value: snappedValue / config.coordinateScale,
-          mesh: createGridLabelMesh(
-            `grid_${axis}_${state.majorValueStep}_${state.halfRangeWorld}_${snappedValue}`,
-            labelText,
-            rotationZ,
-          ),
-        });
-      }
-
-      return entries;
-    }
-
-    function getNiceCeilStep(value) {
-      if (!Number.isFinite(value) || value <= 0) {
-        return 1;
-      }
-
-      const exponent = Math.floor(Math.log10(value));
-      const magnitude = 10 ** exponent;
-      const normalized = value / magnitude;
-
-      for (const factor of [1, 2, 2.5, 5, 10]) {
-        if (normalized <= factor) {
-          return factor * magnitude;
-        }
-      }
-
-      return 10 * magnitude;
-    }
-
-    function getAdaptiveGridState(scene, camera, config) {
-      const unitWorldStep = 1 / config.coordinateScale;
-      const origin = projectToScreen(scene, camera, new Vector3(0, 0, config.elevation));
-      const xUnit = projectToScreen(scene, camera, new Vector3(unitWorldStep, 0, config.elevation));
-      const yUnit = projectToScreen(scene, camera, new Vector3(0, unitWorldStep, config.elevation));
-      const pixelPerValueUnit = Math.max(
-        1e-4,
-        (Math.hypot(xUnit.x - origin.x, xUnit.y - origin.y) +
-          Math.hypot(yUnit.x - origin.x, yUnit.y - origin.y)) / 2,
-      );
-      const roughMajorValueStep = config.targetMajorPixelSpacing / pixelPerValueUnit;
-      const majorValueStep = Math.min(
-        config.maxMajorValueStep,
-        Math.max(config.minMajorValueStep, getNiceCeilStep(roughMajorValueStep)),
-      );
-      const minorValueStep = majorValueStep / config.minorPerMajor;
-      const halfRangeValue = config.halfRangeValue;
-      const halfRangeWorld = halfRangeValue / config.coordinateScale;
-
-      return {
-        coordinateScale: config.coordinateScale,
-        halfRangeValue,
-        halfRangeWorld,
-        size: halfRangeWorld * 2,
-        majorValueStep,
-        minorValueStep,
-        majorWorldStep: majorValueStep / config.coordinateScale,
-        minorWorldStep: minorValueStep / config.coordinateScale,
-      };
-    }
-
-    function ensureGridCoordinateMeshes(state, config) {
-      for (const axis of ['right', 'bottom']) {
-        const signature = `${state.halfRangeWorld.toFixed(4)}|${state.majorValueStep}`;
-        if (gridLabelMeshes[axis].signature === signature) {
-          continue;
-        }
-
-        disposeGridLabelEntries(gridLabelMeshes[axis].entries);
-        gridLabelMeshes[axis].entries = buildGridLabelEntries(axis, state, config);
-        gridLabelMeshes[axis].signature = signature;
-      }
-    }
-
-    // Coordinate labels are real scene meshes attached to the projected outer grid edges.
-    function updateGridCoordinateMeshes(scene, camera, state, config) {
-      ensureGridCoordinateMeshes(state, config);
-
-      const labelHeight = config.elevation + 0.03;
-      const worldOffset = Math.min(Math.max(state.minorWorldStep * 0.4, 0.16), 0.42);
-      const { rightY, bottomX } = getProjectedGridBoundaries(
-        scene,
-        camera,
-        state.halfRangeWorld,
-        config.elevation,
-      );
-      const rightYDirection = Math.sign(rightY) || 1;
-      const bottomXDirection = Math.sign(bottomX) || 1;
-      const rightRotation = rightYDirection > 0 ? Math.PI / 2 : -Math.PI / 2;
-      const bottomRotation = bottomXDirection > 0 ? 0 : Math.PI;
-
-      for (const label of gridLabelMeshes.right.entries) {
-        label.mesh.position.set(label.value, rightY + rightYDirection * worldOffset, labelHeight);
-        label.mesh.rotation.z = rightRotation;
-      }
-
-      for (const label of gridLabelMeshes.bottom.entries) {
-        label.mesh.position.set(bottomX + bottomXDirection * worldOffset, label.value, labelHeight);
-        label.mesh.rotation.z = bottomRotation;
-      }
-    }
-
-    function updateAdaptiveGrid(scene, camera, config) {
-      const state = getAdaptiveGridState(scene, camera, config);
-      syncGridMeshes(scene, state, config.elevation);
-      updateGridCoordinateMeshes(scene, camera, state, config);
     }
 
     // Z-up camera
@@ -423,15 +139,123 @@
     const light = new HemisphericLight('light', new Vector3(0.3, -0.5, 1), scene);
     light.intensity = 0.9;
 
-    // Simple cube
-    const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
-    box.position.z = 1;
-    const boxMat = new StandardMaterial('boxMat', scene);
-    boxMat.diffuseColor = new Color3(0.2, 0.6, 0.9);
-    box.material = boxMat;
+    const gridMap = new GridMap({
+      scene,
+      camera,
+      canvas: mainCanvas,
+    });
+
+    function createDefaultModelRoot() {
+      const root = new TransformNode('modelRoot', scene);
+      const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
+      box.parent = root;
+      box.position.z = 1;
+
+      const boxMat = new StandardMaterial('boxMat', scene);
+      boxMat.diffuseColor = new Color3(0.2, 0.6, 0.9);
+      box.material = boxMat;
+
+      return root;
+    }
+
+    let modelRoot = createDefaultModelRoot();
+    let activeModelSummary = {
+      name: 'default-cube',
+      meshCount: 1,
+      triangleCount: 12,
+    };
+    let ioBusy = false;
+    let ioStatusText = 'Ready.';
+
+    const ioStatus = document.getElementById('ioStatus');
+    const stepFileInput = document.getElementById('stepFileInput');
+    const stepImportLabel = document.getElementById('stepImportLabel');
+    const stepExportBtn = document.getElementById('stepExportBtn');
+
+    function setIoStatus(text) {
+      ioStatusText = text;
+      ioStatus.textContent = text;
+    }
+
+    function setIoBusy(busy) {
+      ioBusy = busy;
+      stepFileInput.disabled = busy;
+      stepExportBtn.disabled = busy;
+      stepImportLabel.classList.toggle('is-disabled', busy);
+    }
+
+    function getModelBounds(meshes) {
+      if (!meshes.length) {
+        return null;
+      }
+
+      const min = new Vector3(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+      const max = new Vector3(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+
+      for (const mesh of meshes) {
+        mesh.computeWorldMatrix(true);
+        const boundingInfo = mesh.getBoundingInfo();
+        min.minimizeInPlace(boundingInfo.boundingBox.minimumWorld);
+        max.maximizeInPlace(boundingInfo.boundingBox.maximumWorld);
+      }
+
+      const center = min.add(max).scale(0.5);
+      const extents = max.subtract(min).scale(0.5);
+
+      return {
+        min,
+        max,
+        center,
+        boundingRadius: extents.length(),
+        halfRangeXYWorld: Math.max(
+          Math.abs(min.x),
+          Math.abs(max.x),
+          Math.abs(min.y),
+          Math.abs(max.y),
+          1,
+        ),
+      };
+    }
+
+    function fitCameraToModel(meshes) {
+      const bounds = getModelBounds(meshes);
+      if (!bounds) {
+        return;
+      }
+
+      const { center, boundingRadius } = bounds;
+      const safeRadius = Math.max(4, (boundingRadius / Math.sin(camera.fov / 2)) * 1.15);
+
+      camera.target.copyFrom(center);
+      camera.radius = safeRadius;
+
+      if (camera.mode === Camera.ORTHOGRAPHIC_CAMERA) {
+        applyOrthographicBounds(camera);
+      }
+    }
+
+    function updateActiveModel(root, summary, name) {
+      if (modelRoot) {
+        modelRoot.dispose(false, true);
+      }
+
+      modelRoot = root;
+      modelRoot.name = 'modelRoot';
+      activeModelSummary = {
+        name,
+        meshCount: summary.meshCount,
+        triangleCount: summary.triangleCount,
+      };
+
+      fitCameraToModel(modelRoot.getChildMeshes());
+      gridMap.fitToMeshes(modelRoot.getChildMeshes());
+    }
+
+    fitCameraToModel(modelRoot.getChildMeshes());
+    gridMap.fitToMeshes(modelRoot.getChildMeshes());
 
     engine.runRenderLoop(() => {
-      updateAdaptiveGrid(scene, camera, gridConfig);
+      gridMap.update();
       scene.render();
     });
     window.addEventListener('resize', () => engine.resize());
@@ -490,6 +314,72 @@
 
     // Expose for e2e tests
     window.cubeView = cubeView;
+    window.rendererDemo = {
+      getModelSummary: () => ({ ...activeModelSummary }),
+      getStatus: () => ioStatusText,
+      getGridSummary: () => ({ ...gridMap.getState() }),
+      getGridLabelNames: () => scene.meshes
+        .map((mesh) => mesh.name)
+        .filter((name) => name.startsWith('grid_right_') || name.startsWith('grid_bottom_')),
+      setCameraRadius: (radius) => {
+        camera.radius = radius;
+        if (camera.mode === Camera.ORTHOGRAPHIC_CAMERA) {
+          applyOrthographicBounds(camera);
+        }
+      },
+      offsetModel: ({ x = 0, y = 0, z = 0 }) => {
+        modelRoot.position.set(x, y, z);
+        fitCameraToModel(modelRoot.getChildMeshes());
+        gridMap.fitToMeshes(modelRoot.getChildMeshes());
+      },
+    };
+
+    stepFileInput.addEventListener('change', async (event) => {
+      const [file] = event.target.files ?? [];
+      if (!file || ioBusy) {
+        return;
+      }
+
+      setIoBusy(true);
+
+      try {
+        const { root, summary } = await loadStepModel({
+          scene,
+          file,
+          onStatus: setIoStatus,
+        });
+
+        updateActiveModel(root, summary, file.name);
+      } catch (error) {
+        console.error(error);
+        setIoStatus(error instanceof Error ? error.message : 'Failed to load STEP file.');
+      } finally {
+        stepFileInput.value = '';
+        setIoBusy(false);
+      }
+    });
+
+    stepExportBtn.addEventListener('click', async () => {
+      if (ioBusy) {
+        return;
+      }
+
+      setIoBusy(true);
+
+      try {
+        const fileStem = activeModelSummary.name.replace(/\.[^.]+$/, '');
+        await exportMeshesToStep({
+          meshes: modelRoot.getChildMeshes(),
+          fileName: `${fileStem}.step`,
+          onStatus: setIoStatus,
+        });
+      } catch (error) {
+        console.error(error);
+        setIoStatus(error instanceof Error ? error.message : 'Failed to export STEP file.');
+      } finally {
+        setIoBusy(false);
+      }
+    });
 
     // Language toggle
     const langBtn = document.getElementById('langBtn');

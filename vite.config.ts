@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  assetsInclude: ['**/*.wasm'],
+  optimizeDeps: {
+    exclude: ['occt-import-js'],
+  },
   build: {
     lib: {
       entry: 'src/index.ts',

@@ -1,4 +1,5 @@
 export { CubeView } from './CubeView';
+export { GridMap } from './GridMap';
 export type {
   CubeViewChangePhase,
   CubeViewChangeSource,
@@ -8,3 +9,7 @@ export type {
   CubeViewProjectionMode,
   CubeViewLocale,
 } from './CubeView';
+export type {
+  GridMapOptions,
+  GridMapState,
+} from './GridMap';
