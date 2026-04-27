@@ -44,6 +44,7 @@ import {
   Vector as StepVector,
   VertexPoint,
 } from 'stepts';
+import { getLengthUnitDefinition } from './units.ts';
 
 const DEFAULT_IMPORT_PARAMS = {
   linearUnit: 'millimeter',
@@ -134,13 +135,22 @@ async function getOcctImport() {
 
 function createImportedMaterial(scene, meshData, materialName) {
   const material = new StandardMaterial(materialName, scene);
-  material.specularColor = new Color3(0.12, 0.12, 0.12);
+  material.specularColor = new Color3(0.08, 0.08, 0.08);
+  material.specularPower = 48;
 
   if (Array.isArray(meshData.color) && meshData.color.length === 3) {
     material.diffuseColor = new Color3(meshData.color[0], meshData.color[1], meshData.color[2]);
   } else {
     material.diffuseColor = new Color3(...DEFAULT_EXPORT_COLOR);
   }
+
+  material.ambientColor = new Color3(
+    material.diffuseColor.r * 0.25,
+    material.diffuseColor.g * 0.25,
+    material.diffuseColor.b * 0.25,
+  );
+  material.backFaceCulling = false;
+  material.twoSidedLighting = true;
 
   return material;
 }
@@ -207,6 +217,7 @@ export async function loadStepModel({
   scene,
   file,
   importParams = DEFAULT_IMPORT_PARAMS,
+  worldScale = 1,
   onStatus,
 }) {
   if (!file) {
@@ -249,6 +260,11 @@ export async function loadStepModel({
   }
 
   const meshes = root.getChildMeshes();
+  if (Number.isFinite(worldScale) && worldScale > 0 && worldScale !== 1) {
+    root.scaling.setAll(worldScale);
+    root.computeWorldMatrix(true);
+  }
+
   const summary = summarizeMeshes(meshes);
 
   setStatus(
@@ -277,10 +293,13 @@ function triangleAreaSquared(a, b, c) {
   return crossX * crossX + crossY * crossY + crossZ * crossZ;
 }
 
-function transformPointToRef(worldMatrix, source, vertexIndex, target) {
+function transformPointToRef(worldMatrix, source, vertexIndex, target, coordinateScale = 1) {
   const offset = vertexIndex * 3;
   target.copyFromFloats(source[offset], source[offset + 1], source[offset + 2]);
   Vector3.TransformCoordinatesToRef(target, worldMatrix, target);
+  if (coordinateScale !== 1) {
+    target.scaleInPlace(coordinateScale);
+  }
 }
 
 function triggerDownload(bytes, fileName) {
@@ -344,12 +363,55 @@ function getMeshColor(mesh) {
   return DEFAULT_EXPORT_COLOR;
 }
 
-function createRepresentationContext(repo, modelName) {
-  const lengthUnit = repo.add(
+function createSiLengthUnit(repo, siPrefix) {
+  return repo.add(
     new Unknown('', [
-      '( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )',
+      `( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(${siPrefix},.METRE.) )`,
     ]),
   );
+}
+
+function createLengthUnit(repo, linearUnit) {
+  const unitDefinition = getLengthUnitDefinition(linearUnit);
+
+  if (unitDefinition.stepSiPrefix) {
+    return createSiLengthUnit(repo, unitDefinition.stepSiPrefix);
+  }
+
+  const dimensions = repo.add(
+    new Unknown('DIMENSIONAL_EXPONENTS', [
+      '1.',
+      '0.',
+      '0.',
+      '0.',
+      '0.',
+      '0.',
+      '0.',
+    ]),
+  );
+  const millimeterUnit = createSiLengthUnit(repo, '.MILLI.');
+  const conversion = repo.add(
+    new Unknown('LENGTH_MEASURE_WITH_UNIT', [
+      `${unitDefinition.millimetersPerUnit}`,
+      `${millimeterUnit}`,
+    ]),
+  );
+
+  return repo.add(
+    new Unknown('', [
+      `( CONVERSION_BASED_UNIT('${unitDefinition.stepConversionName}',${conversion}) LENGTH_UNIT() NAMED_UNIT(${dimensions}) )`,
+    ]),
+  );
+}
+
+function getLengthUncertainty(linearUnit) {
+  const unitDefinition = getLengthUnitDefinition(linearUnit);
+  const uncertainty = 1e-7 / unitDefinition.millimetersPerUnit;
+  return Number(uncertainty.toPrecision(12)).toString();
+}
+
+function createRepresentationContext(repo, modelName, linearUnit) {
+  const lengthUnit = createLengthUnit(repo, linearUnit);
   const angleUnit = repo.add(
     new Unknown('', [
       '( NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.) )',
@@ -362,7 +424,7 @@ function createRepresentationContext(repo, modelName) {
   );
   const uncertainty = repo.add(
     new Unknown('UNCERTAINTY_MEASURE_WITH_UNIT', [
-      'LENGTH_MEASURE(1.E-07)',
+      `LENGTH_MEASURE(${getLengthUncertainty(linearUnit)})`,
       `${lengthUnit}`,
       "'distance_accuracy_value'",
       "'Maximum Tolerance'",
@@ -465,6 +527,7 @@ async function buildSolidForMesh({
   repo,
   mesh,
   meshIndex,
+  coordinateScale,
   progress,
   onStatus,
 }) {
@@ -488,9 +551,9 @@ async function buildSolidForMesh({
   const cross = new Vector3();
 
   for (let indexOffset = 0; indexOffset < indices.length; indexOffset += 3) {
-    transformPointToRef(worldMatrix, positions, indices[indexOffset], pointA);
-    transformPointToRef(worldMatrix, positions, indices[indexOffset + 1], pointB);
-    transformPointToRef(worldMatrix, positions, indices[indexOffset + 2], pointC);
+    transformPointToRef(worldMatrix, positions, indices[indexOffset], pointA, coordinateScale);
+    transformPointToRef(worldMatrix, positions, indices[indexOffset + 1], pointB, coordinateScale);
+    transformPointToRef(worldMatrix, positions, indices[indexOffset + 2], pointC, coordinateScale);
 
     if (triangleAreaSquared(pointA, pointB, pointC) <= TRIANGLE_EPSILON_SQUARED) {
       continue;
@@ -621,6 +684,8 @@ function createProductStructure(repo, modelName, geomContext, solidRefs, styledI
 export async function exportMeshesToStep({
   meshes,
   fileName = 'scene.step',
+  linearUnit = DEFAULT_IMPORT_PARAMS.linearUnit,
+  coordinateScale = 1,
   onStatus,
 }) {
   const exportableMeshes = getExportableMeshData(meshes);
@@ -632,7 +697,7 @@ export async function exportMeshesToStep({
 
   const modelName = sanitizeNodeName(stripExtension(fileName), 'scene');
   const repo = new Repository();
-  const geomContext = createRepresentationContext(repo, modelName);
+  const geomContext = createRepresentationContext(repo, modelName, linearUnit);
   const progress = { exportedTriangles: 0 };
   const solidRefs = [];
   const styledItemRefs = [];
@@ -643,6 +708,7 @@ export async function exportMeshesToStep({
       repo,
       mesh,
       meshIndex,
+      coordinateScale,
       progress,
       onStatus,
     });
@@ -671,7 +737,10 @@ export async function exportMeshesToStep({
 
   setStatus(onStatus, 'Validating exported STEP...');
   const occt = await getOcctImport();
-  const validationResult = occt.ReadStepFile(stepBytes, DEFAULT_IMPORT_PARAMS);
+  const validationResult = occt.ReadStepFile(stepBytes, {
+    ...DEFAULT_IMPORT_PARAMS,
+    linearUnit,
+  });
   if (!validationResult?.success) {
     throw new Error('The generated STEP file failed validation.');
   }

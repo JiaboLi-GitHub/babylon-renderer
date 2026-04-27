@@ -16,6 +16,7 @@ export interface GridMapOptions {
   scene: Scene;
   camera: Camera;
   canvas: HTMLCanvasElement;
+  unitLabel?: string;
   elevation?: number;
   coordinateScale?: number;
   minimumHalfRangeValue?: number;
@@ -30,7 +31,16 @@ export interface GridMapOptions {
   maxMajorValueStep?: number;
 }
 
+export interface GridMapUnitOptions {
+  unitLabel?: string;
+  coordinateScale?: number;
+  minimumHalfRangeValue?: number;
+  minMajorValueStep?: number;
+  maxMajorValueStep?: number;
+}
+
 export interface GridMapState {
+  unitLabel: string;
   coordinateScale: number;
   minXValue: number;
   maxXValue: number;
@@ -54,6 +64,7 @@ export interface GridMapState {
 }
 
 interface GridMapConfig {
+  unitLabel: string;
   elevation: number;
   coordinateScale: number;
   minimumHalfRangeValue: number;
@@ -89,6 +100,7 @@ interface GridLabelEntry {
 }
 
 const DEFAULT_GRID_MAP_CONFIG: GridMapConfig = {
+  unitLabel: '',
   elevation: 0,
   coordinateScale: 25,
   minimumHalfRangeValue: 350,
@@ -135,12 +147,14 @@ export class GridMap {
 
   private rangeWorld: GridMapRangeWorld;
   private currentState: GridMapState | null = null;
+  private fittedMeshes: AbstractMesh[] = [];
 
   constructor(options: GridMapOptions) {
     this.scene = options.scene;
     this.camera = options.camera;
     this.canvas = options.canvas;
     this.config = {
+      unitLabel: options.unitLabel ?? DEFAULT_GRID_MAP_CONFIG.unitLabel,
       elevation: options.elevation ?? DEFAULT_GRID_MAP_CONFIG.elevation,
       coordinateScale: options.coordinateScale ?? DEFAULT_GRID_MAP_CONFIG.coordinateScale,
       minimumHalfRangeValue: options.minimumHalfRangeValue ?? DEFAULT_GRID_MAP_CONFIG.minimumHalfRangeValue,
@@ -158,8 +172,36 @@ export class GridMap {
   }
 
   fitToMeshes(meshes: AbstractMesh[]) {
+    this.fittedMeshes = [...meshes];
     const bounds = this.getModelBounds(meshes);
     this.rangeWorld = this.getGridRangeWorld(bounds);
+  }
+
+  setUnitOptions(options: GridMapUnitOptions) {
+    if (options.unitLabel !== undefined) {
+      this.config.unitLabel = options.unitLabel;
+    }
+
+    this.config.coordinateScale = this.getPositiveOption(
+      options.coordinateScale,
+      this.config.coordinateScale,
+    );
+    this.config.minimumHalfRangeValue = this.getPositiveOption(
+      options.minimumHalfRangeValue,
+      this.config.minimumHalfRangeValue,
+    );
+    this.config.minMajorValueStep = this.getPositiveOption(
+      options.minMajorValueStep,
+      this.config.minMajorValueStep,
+    );
+    this.config.maxMajorValueStep = this.getPositiveOption(
+      options.maxMajorValueStep,
+      this.config.maxMajorValueStep,
+    );
+
+    this.clearGridSignatures();
+    this.fitToMeshes(this.fittedMeshes);
+    this.currentState = null;
   }
 
   update() {
@@ -183,9 +225,17 @@ export class GridMap {
     this.disposeGridLabelEntries(this.gridLabelMeshes.bottom.entries);
     this.gridLabelMeshes.right.entries = [];
     this.gridLabelMeshes.bottom.entries = [];
+    this.clearGridSignatures();
+  }
+
+  private clearGridSignatures() {
     this.gridLabelMeshes.right.signature = null;
     this.gridLabelMeshes.bottom.signature = null;
     this.gridMeshes.signature = null;
+  }
+
+  private getPositiveOption(value: number | undefined, fallback: number) {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : fallback;
   }
 
   private getDefaultRangeWorld(): GridMapRangeWorld {
@@ -365,7 +415,7 @@ export class GridMap {
   }
 
   private createGridLabelMesh(name: string, text: string, rotationZ = 0) {
-    const width = Math.max(1.1, text.length * 0.36 + 0.4);
+    const width = Math.max(1.1, text.length * 0.34 + 0.42);
     const height = 0.58;
     const plane = MeshBuilder.CreatePlane(name, { width, height }, this.scene);
     const texture = new DynamicTexture(`${name}_texture`, {
@@ -375,7 +425,8 @@ export class GridMap {
     const ctx = texture.getContext() as CanvasRenderingContext2D;
 
     ctx.clearRect(0, 0, 512, 256);
-    ctx.font = '400 100px "Segoe UI", "Microsoft YaHei", sans-serif';
+    const fontSize = Math.max(58, Math.min(100, Math.floor(760 / Math.max(text.length, 1))));
+    ctx.font = `400 ${fontSize}px "Segoe UI", "Microsoft YaHei", sans-serif`;
     ctx.fillStyle = '#9d9d9d';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -400,6 +451,19 @@ export class GridMap {
       mesh: plane,
       baseHeight: height,
     };
+  }
+
+  private formatGridLabelValue(value: number) {
+    const absValue = Math.abs(value);
+    const decimals = absValue >= 100
+      ? 0
+      : absValue >= 10
+        ? 1
+        : absValue >= 1
+          ? 2
+          : 4;
+
+    return Number(absValue.toFixed(decimals)).toString();
   }
 
   private getWorldUnitsPerPixel(point: Vector3) {
@@ -434,7 +498,7 @@ export class GridMap {
 
     for (const value of rangeValues) {
       const snappedValue = Math.abs(value) < 1e-6 ? 0 : Number(value.toFixed(6));
-      const labelText = `${Math.round(Math.abs(snappedValue))}`;
+      const labelText = this.formatGridLabelValue(snappedValue);
       const labelMesh = this.createGridLabelMesh(
         `grid_${axis}_${state.majorValueStep}_${snappedValue}`,
         labelText,
@@ -626,6 +690,7 @@ export class GridMap {
     const halfRangeWorld = halfRangeValue / this.config.coordinateScale;
 
     return {
+      unitLabel: this.config.unitLabel,
       coordinateScale: this.config.coordinateScale,
       minXValue,
       maxXValue,
@@ -653,6 +718,7 @@ export class GridMap {
     for (const axis of ['right', 'bottom'] as const) {
       const signature = [
         axis,
+        this.config.unitLabel,
         state.minXValue,
         state.maxXValue,
         state.minYValue,

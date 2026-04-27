@@ -151,6 +151,66 @@ test('loads a STEP file into the scene', async ({ page }) => {
   expect(gridSummary.halfRangeValue).toBeGreaterThan(defaultGrid.halfRangeValue);
 });
 
+test('switches project units and converts grid values', async ({ page }) => {
+  const unitOptions = await page.locator('#unitSelect option').evaluateAll((options) => (
+    options.map((option) => (option as HTMLOptionElement).value)
+  ));
+  const defaultGrid = await page.evaluate(() => (window as any).rendererDemo.getGridSummary());
+  const defaultBounds = await page.evaluate(() => (window as any).rendererDemo.getModelBounds());
+  const defaultWidth = defaultBounds.max.x - defaultBounds.min.x;
+  expect(unitOptions).toEqual(['millimeter', 'centimeter']);
+  expect(defaultGrid.unitLabel).toBe('mm');
+  expect(defaultGrid.coordinateScale).toBe(25);
+
+  await page.selectOption('#unitSelect', 'centimeter');
+  await waitForRender(page);
+
+  const centimeterUnit = await page.evaluate(() => (window as any).rendererDemo.getUnit());
+  const centimeterGrid = await page.evaluate(() => (window as any).rendererDemo.getGridSummary());
+  const centimeterBounds = await page.evaluate(() => (window as any).rendererDemo.getModelBounds());
+  const centimeterWidth = centimeterBounds.max.x - centimeterBounds.min.x;
+  expect(centimeterUnit.key).toBe('centimeter');
+  expect(centimeterGrid.unitLabel).toBe('cm');
+  expect(centimeterGrid.coordinateScale).toBeCloseTo(2.5);
+  expect(centimeterWidth).toBeCloseTo(defaultWidth);
+  expect(centimeterGrid.widthWorld).toBeCloseTo(defaultGrid.widthWorld);
+  expect(centimeterGrid.widthValue).toBeCloseTo(defaultGrid.widthValue / 10);
+
+  await page.selectOption('#unitSelect', 'millimeter');
+  await waitForRender(page);
+
+  const restoredGrid = await page.evaluate(() => (window as any).rendererDemo.getGridSummary());
+  const restoredBounds = await page.evaluate(() => (window as any).rendererDemo.getModelBounds());
+  const restoredWidth = restoredBounds.max.x - restoredBounds.min.x;
+  expect(restoredGrid.unitLabel).toBe('mm');
+  expect(restoredGrid.coordinateScale).toBeCloseTo(25);
+  expect(restoredWidth).toBeCloseTo(defaultWidth);
+  expect(restoredGrid.widthWorld).toBeCloseTo(defaultGrid.widthWorld);
+  expect(restoredGrid.widthValue).toBeCloseTo(defaultGrid.widthValue);
+});
+
+test('shows a scale bar that follows the selected unit', async ({ page }) => {
+  const scaleBar = page.locator('#scaleBar');
+  await expect(scaleBar).toBeVisible();
+
+  const millimeterScale = await page.evaluate(() => (window as any).rendererDemo.getScaleBarSummary());
+  expect(millimeterScale.visible).toBe(true);
+  expect(millimeterScale.unitLabel).toBe('mm');
+  expect(millimeterScale.label).toMatch(/mm$/);
+  expect(millimeterScale.pixelWidth).toBeGreaterThan(48);
+  expect(millimeterScale.pixelWidth).toBeLessThan(160);
+
+  await page.selectOption('#unitSelect', 'centimeter');
+  await waitForRender(page);
+
+  const centimeterScale = await page.evaluate(() => (window as any).rendererDemo.getScaleBarSummary());
+  expect(centimeterScale.visible).toBe(true);
+  expect(centimeterScale.unitLabel).toBe('cm');
+  expect(centimeterScale.label).toMatch(/cm$/);
+  expect(centimeterScale.value).toBeCloseTo(millimeterScale.value / 10);
+  expect(centimeterScale.pixelWidth).toBeCloseTo(millimeterScale.pixelWidth);
+});
+
 test('biases the grid range toward an offset model', async ({ page }) => {
   const defaultGrid = await page.evaluate(() => (window as any).rendererDemo.getGridSummary());
 
@@ -243,4 +303,24 @@ test('exports the active model as STEP', async ({ page }) => {
     meshCount: 1,
     triangleCount: 12,
   });
+});
+
+test('exports STEP with selected project unit metadata', async ({ page }) => {
+  test.setTimeout(120_000);
+
+  await page.selectOption('#unitSelect', 'centimeter');
+  await waitForRender(page);
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download', { timeout: 120_000 }),
+    page.click('#stepExportBtn'),
+  ]);
+
+  await expect(download.failure()).resolves.toBeNull();
+
+  const downloadPath = await download.path();
+  expect(downloadPath).toBeTruthy();
+
+  const stepText = fs.readFileSync(downloadPath!, 'utf8');
+  expect(stepText).toContain('SI_UNIT(.CENTI.,.METRE.)');
 });

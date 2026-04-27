@@ -1,5 +1,11 @@
 export { CubeView } from './CubeView';
 export { GridMap } from './GridMap';
+export {
+  DEFAULT_LENGTH_UNIT,
+  LENGTH_UNITS,
+  getGridUnitOptions,
+  getLengthUnitDefinition,
+} from './units';
 export type {
   CubeViewChangePhase,
   CubeViewChangeSource,
@@ -12,4 +18,10 @@ export type {
 export type {
   GridMapOptions,
   GridMapState,
+  GridMapUnitOptions,
 } from './GridMap';
+export type {
+  GridUnitOptions,
+  LengthUnit,
+  LengthUnitDefinition,
+} from './units';
