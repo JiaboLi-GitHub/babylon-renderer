@@ -301,7 +301,7 @@
       </div>
     </div>
     <label id="ssaoToggleLabel" class="toolbar-switch" for="ssaoToggle">
-      <input id="ssaoToggle" type="checkbox" checked>
+      <input id="ssaoToggle" type="checkbox">
       <span class="switch-track" aria-hidden="true"></span>
       SSAO
     </label>
@@ -376,11 +376,20 @@
     camera.attachControl(mainCanvas, true);
 
     const CAM_SSAO_PIPELINE_NAME = 'camSsaoPipeline';
-    const camSsaoPipeline = SSAO2RenderingPipeline.IsSupported
-      ? new SSAO2RenderingPipeline(CAM_SSAO_PIPELINE_NAME, scene, { ssaoRatio: 0.75, blurRatio: 0.75 }, [camera])
-      : null;
+    const isCamSsaoSupported = SSAO2RenderingPipeline.IsSupported;
+    let camSsaoPipeline = null;
 
-    if (camSsaoPipeline) {
+    function ensureCamSsaoPipeline() {
+      if (camSsaoPipeline || !isCamSsaoSupported) {
+        return camSsaoPipeline;
+      }
+
+      camSsaoPipeline = new SSAO2RenderingPipeline(
+        CAM_SSAO_PIPELINE_NAME,
+        scene,
+        { ssaoRatio: 0.75, blurRatio: 0.75 },
+        null,
+      );
       camSsaoPipeline.samples = 16;
       camSsaoPipeline.textureSamples = 1;
       camSsaoPipeline.totalStrength = 0.68;
@@ -393,6 +402,12 @@
       camSsaoPipeline.bilateralSamples = 12;
       camSsaoPipeline.bilateralSoften = 0.38;
       camSsaoPipeline.bilateralTolerance = 0.45;
+
+      if (modelRoot) {
+        updateCamSsao(getModelBounds(modelRoot.getChildMeshes()));
+      }
+
+      return camSsaoPipeline;
     }
 
     // CAM-style viewport lighting: high readability, low contrast, no cast shadows.
@@ -434,7 +449,7 @@
     const camShadowGenerator = new ShadowGenerator(2048, stableShadowLight);
     camShadowGenerator.useBlurExponentialShadowMap = true;
     camShadowGenerator.blurKernel = 36;
-    camShadowGenerator.darkness = 0.52;
+    camShadowGenerator.darkness = 0.22;
     camShadowGenerator.transparencyShadow = true;
 
     const camShadowGround = MeshBuilder.CreatePlane('camShadowGround', { size: 1 }, scene);
@@ -446,7 +461,7 @@
     const camShadowMaterial = new ShadowOnlyMaterial('camShadowOnlyMaterial', scene);
     camShadowMaterial.activeLight = stableShadowLight;
     camShadowMaterial.shadowColor = new Color3(0.16, 0.17, 0.18);
-    camShadowMaterial.alpha = 0.38;
+    camShadowMaterial.alpha = 0.18;
     camShadowMaterial.backFaceCulling = false;
     camShadowMaterial.transparencyMode = Material.MATERIAL_ALPHABLEND;
     camShadowMaterial.disableDepthWrite = true;
@@ -460,8 +475,8 @@
     contactShadowTexture.hasAlpha = true;
     const contactShadowContext = contactShadowTexture.getContext();
     const contactShadowGradient = contactShadowContext.createRadialGradient(256, 256, 22, 256, 256, 250);
-    contactShadowGradient.addColorStop(0, 'rgba(0, 0, 0, 0.28)');
-    contactShadowGradient.addColorStop(0.58, 'rgba(0, 0, 0, 0.13)');
+    contactShadowGradient.addColorStop(0, 'rgba(0, 0, 0, 0.10)');
+    contactShadowGradient.addColorStop(0.58, 'rgba(0, 0, 0, 0.04)');
     contactShadowGradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
     contactShadowContext.clearRect(0, 0, 512, 512);
     contactShadowContext.fillStyle = contactShadowGradient;
@@ -543,7 +558,7 @@
     ];
     let currentMaterialMode = MATERIAL_MODES.DEFAULT;
     let activeOverrideMaterial = null;
-    let ssaoEnabled = Boolean(camSsaoPipeline);
+    let ssaoEnabled = false;
     let shadowsEnabled = true;
 
     function getOverrideMaterialName(mode, name) {
@@ -615,7 +630,7 @@
         const material = createCamMaterialPreset(scene, currentMaterialMode, {
           name: getOverrideMaterialName(currentMaterialMode, activeModelSummary?.name ?? root.name),
         });
-        applySharedMaterialToRoot(root, material);
+        applySharedMaterialToRoot(root, material, { ensureUvs: currentMaterialMode === 'steel' });
         return;
       }
 
@@ -626,7 +641,7 @@
       const root = new TransformNode('modelRoot', scene);
       const box = MeshBuilder.CreateBox('box', { size: 2 }, scene);
       box.parent = root;
-      box.position.z = 1;
+      box.position.z = 6;
 
       const boxMat = new StandardMaterial('defaultCubeMaterial', scene);
       boxMat.diffuseColor = new Color3(0.2, 0.6, 0.9);
@@ -686,7 +701,7 @@
 
     function syncRenderSwitchUi() {
       ssaoToggle.checked = ssaoEnabled;
-      ssaoToggle.disabled = ioBusy || !camSsaoPipeline;
+      ssaoToggle.disabled = ioBusy || !isCamSsaoSupported;
       ssaoToggleLabel.classList.toggle('is-disabled', ssaoToggle.disabled);
 
       shadowToggle.checked = shadowsEnabled;
@@ -695,9 +710,10 @@
     }
 
     function setSsaoEnabled(enabled, { silent = false } = {}) {
-      const nextEnabled = Boolean(enabled && camSsaoPipeline);
+      const pipeline = enabled ? ensureCamSsaoPipeline() : camSsaoPipeline;
+      const nextEnabled = Boolean(enabled && pipeline);
 
-      if (camSsaoPipeline && ssaoEnabled !== nextEnabled) {
+      if (pipeline && ssaoEnabled !== nextEnabled) {
         const pipelineManager = scene.postProcessRenderPipelineManager;
         if (nextEnabled) {
           pipelineManager.attachCamerasToRenderPipeline(CAM_SSAO_PIPELINE_NAME, [camera], true);
@@ -710,7 +726,7 @@
       syncRenderSwitchUi();
 
       if (!silent) {
-        setIoStatus(camSsaoPipeline
+        setIoStatus(isCamSsaoSupported
           ? `SSAO ${ssaoEnabled ? 'enabled' : 'disabled'}.`
           : 'SSAO is not supported.');
       }
@@ -1128,6 +1144,7 @@
           hasAlbedoTexture: Boolean(material?.albedoTexture),
           hasBumpTexture: Boolean(material?.bumpTexture),
           hasMetallicTexture: Boolean(material?.metallicTexture),
+          hasSceneEnvironmentTexture: Boolean(scene.environmentTexture),
           albedoColor: material?.albedoColor?.toHexString?.() ?? material?.diffuseColor?.toHexString?.() ?? '',
           metallic: material?.metallic ?? null,
           roughness: material?.roughness ?? null,
@@ -1195,7 +1212,7 @@
       },
       setShadowEnabled: (enabled) => setShadowEnabled(enabled),
       getSsaoSummary: () => ({
-        supported: SSAO2RenderingPipeline.IsSupported,
+        supported: isCamSsaoSupported,
         enabled: ssaoEnabled,
         radius: camSsaoPipeline?.radius ?? 0,
         totalStrength: camSsaoPipeline?.totalStrength ?? 0,

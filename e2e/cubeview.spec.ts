@@ -73,6 +73,45 @@ test('default isometric view', async ({ page }) => {
   await expect(cube).toHaveScreenshot('isometric.png');
 });
 
+test('starts with SSAO disabled', async ({ page }) => {
+  const ssaoToggle = page.locator('#ssaoToggle');
+  const ssaoToggleLabel = page.locator('#ssaoToggleLabel');
+  const summary = await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary());
+
+  expect(summary.enabled).toBe(false);
+  await expect(ssaoToggle).not.toBeChecked();
+
+  if (summary.supported) {
+    await expect(ssaoToggle).toBeEnabled();
+    await ssaoToggleLabel.click();
+    await waitForRender(page);
+    await expect(ssaoToggle).toBeChecked();
+    expect(await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary().enabled)).toBe(true);
+
+    await ssaoToggleLabel.click();
+    await waitForRender(page);
+    await expect(ssaoToggle).not.toBeChecked();
+    expect(await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary().enabled)).toBe(false);
+  } else {
+    await expect(ssaoToggle).toBeDisabled();
+  }
+});
+
+test('steel material uses a reflective textured PBR finish', async ({ page }) => {
+  await page.evaluate(() => (window as any).rendererDemo.setMaterialMode('steel'));
+  await waitForRender(page);
+
+  const summary = await page.evaluate(() => (window as any).rendererDemo.getMaterialSummary());
+  expect(summary.mode).toBe('steel');
+  expect(summary.className).toBe('PBRMaterial');
+  expect(summary.hasBumpTexture).toBe(true);
+  expect(summary.hasMetallicTexture).toBe(true);
+  expect(summary.hasSceneEnvironmentTexture).toBe(true);
+  expect(summary.metallic).toBeGreaterThan(0.95);
+  expect(summary.roughness).toBeLessThan(0.25);
+  expect(summary.environmentIntensity).toBeGreaterThan(0.9);
+});
+
 test('front view', async ({ page }) => {
   await navigateTo(page, 'front');
   const cube = page.locator('#cubeViewWrapper');
