@@ -291,7 +291,7 @@ export function createWalnutPbrMaterial(
   return material;
 }
 
-export function ensureWalnutPbrUvs(mesh: AbstractMesh) {
+export function ensureWalnutPbrUvs(mesh: AbstractMesh, options: { force?: boolean } = {}) {
   if (!(mesh instanceof Mesh)) {
     return;
   }
@@ -303,7 +303,7 @@ export function ensureWalnutPbrUvs(mesh: AbstractMesh) {
 
   const existingUvs = mesh.getVerticesData(VertexBuffer.UVKind);
   const vertexCount = Math.floor(positions.length / 3);
-  if (existingUvs && existingUvs.length >= vertexCount * 2) {
+  if (!options.force && existingUvs && existingUvs.length >= vertexCount * 2) {
     return;
   }
 

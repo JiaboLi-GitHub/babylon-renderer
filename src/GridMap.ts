@@ -50,6 +50,7 @@ export interface GridMapState {
   maxXWorld: number;
   minYWorld: number;
   maxYWorld: number;
+  elevationWorld: number;
   widthValue: number;
   heightValue: number;
   widthWorld: number;
@@ -175,6 +176,16 @@ export class GridMap {
     this.fittedMeshes = [...meshes];
     const bounds = this.getModelBounds(meshes);
     this.rangeWorld = this.getGridRangeWorld(bounds);
+  }
+
+  setElevation(elevation: number) {
+    if (!Number.isFinite(elevation) || Math.abs(this.config.elevation - elevation) < 1e-6) {
+      return;
+    }
+
+    this.config.elevation = elevation;
+    this.currentState = null;
+    this.clearGridSignatures();
   }
 
   setUnitOptions(options: GridMapUnitOptions) {
@@ -348,6 +359,7 @@ export class GridMap {
       state.maxXWorld.toFixed(4),
       state.minYWorld.toFixed(4),
       state.maxYWorld.toFixed(4),
+      state.elevationWorld.toFixed(4),
       state.minorWorldStep.toFixed(4),
       state.majorWorldStep.toFixed(4),
     ].join('|');
@@ -700,6 +712,7 @@ export class GridMap {
       maxXWorld,
       minYWorld,
       maxYWorld,
+      elevationWorld: this.config.elevation,
       widthValue,
       heightValue,
       widthWorld,
@@ -723,6 +736,7 @@ export class GridMap {
         state.maxXValue,
         state.minYValue,
         state.maxYValue,
+        state.elevationWorld.toFixed(4),
         state.majorValueStep,
       ].join('|');
 

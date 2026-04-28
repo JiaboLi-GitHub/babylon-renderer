@@ -104,12 +104,25 @@ test('steel material uses a reflective textured PBR finish', async ({ page }) =>
   const summary = await page.evaluate(() => (window as any).rendererDemo.getMaterialSummary());
   expect(summary.mode).toBe('steel');
   expect(summary.className).toBe('PBRMaterial');
+  expect(summary.hasAlbedoTexture).toBe(true);
   expect(summary.hasBumpTexture).toBe(true);
   expect(summary.hasMetallicTexture).toBe(true);
   expect(summary.hasSceneEnvironmentTexture).toBe(true);
-  expect(summary.metallic).toBeGreaterThan(0.95);
-  expect(summary.roughness).toBeLessThan(0.25);
-  expect(summary.environmentIntensity).toBeGreaterThan(0.9);
+  expect(summary.metallic).toBeGreaterThan(0.6);
+  expect(summary.roughness).toBeGreaterThan(0.25);
+  expect(summary.roughness).toBeLessThan(0.4);
+  expect(summary.environmentIntensity).toBeGreaterThan(0.75);
+  expect(summary.specularIntensity).toBeGreaterThan(0.75);
+  expect(summary.clearCoatEnabled).toBe(true);
+  expect(summary.anisotropyEnabled).toBe(true);
+  expect(summary.anisotropyIntensity).toBeGreaterThan(0.4);
+
+  const ssao = await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary());
+  if (ssao.supported) {
+    expect(ssao.enabled).toBe(true);
+    expect(ssao.totalStrength).toBeGreaterThan(0.45);
+    expect(ssao.totalStrength).toBeLessThan(0.6);
+  }
 });
 
 test('front view', async ({ page }) => {
@@ -248,6 +261,99 @@ test('shows a scale bar that follows the selected unit', async ({ page }) => {
   expect(centimeterScale.label).toMatch(/cm$/);
   expect(centimeterScale.value).toBeCloseTo(millimeterScale.value / 10);
   expect(centimeterScale.pixelWidth).toBeCloseTo(millimeterScale.pixelWidth);
+});
+
+test('generates a simple facing toolpath and exports G-code', async ({ page }) => {
+  await expect(page.locator('#gcodeExportBtn')).toBeDisabled();
+
+  await page.evaluate(() => (window as any).rendererDemo.setMaterialMode('steel'));
+  await page.click('#toolpathGenerateBtn');
+  await expect(page.locator('#ioStatus')).toContainText('Toolpath generated');
+
+  const summary = await page.evaluate(() => (window as any).rendererDemo.getToolpathSummary());
+  expect(summary.strategy).toBe('facing-raster');
+  expect(summary.unitLabel).toBe('mm');
+  expect(summary.toolDiameter).toBeCloseTo(6);
+  expect(summary.stepoverRatio).toBeCloseTo(0.6);
+  expect(summary.rowCount).toBeGreaterThan(1);
+  expect(summary.cutPointCount).toBe(summary.rowCount * 2);
+  expect(summary.rapidSegmentCount).toBe(2);
+  expect(summary.cutLength).toBeGreaterThan(0);
+  expect(summary.meshNames).toEqual(expect.arrayContaining(['toolpathCutLine', 'toolpathRapidLine']));
+
+  await expect(page.locator('#gcodeExportBtn')).toBeEnabled();
+  await expect(page.locator('#simulationSpeedInput')).toBeEnabled();
+  await expect(page.locator('#simulationPlayBtn')).toBeEnabled();
+  await expect(page.locator('#simulationResetBtn')).toBeEnabled();
+
+  const initialSimulation = await page.evaluate(() => (
+    (window as any).rendererDemo.getToolpathSimulationSummary()
+  ));
+  expect(initialSimulation.enabled).toBe(true);
+  expect(initialSimulation.progress).toBe(0);
+  expect(initialSimulation.moveCount).toBeGreaterThan(1);
+  expect(initialSimulation.toolPosition).not.toBeNull();
+  expect(initialSimulation.toolMeshNames).toEqual(expect.arrayContaining([
+    'toolpathSimulationCutter',
+    'toolpathSimulationTip',
+  ]));
+
+  await page.fill('#simulationSpeedInput', '500');
+  await page.click('#simulationPlayBtn');
+  await page.waitForFunction(() => (
+    (window as any).rendererDemo.getToolpathSimulationSummary().progress > 0.02
+  ));
+
+  const runningSimulation = await page.evaluate(() => (
+    (window as any).rendererDemo.getToolpathSimulationSummary()
+  ));
+  expect(runningSimulation.currentDistance).toBeGreaterThan(0);
+  expect(runningSimulation.progress).toBeGreaterThan(0.02);
+  expect(runningSimulation.chipCount).toBeGreaterThan(0);
+  expect(runningSimulation.chipMeshNames[0]).toMatch(/^toolpathChip_/);
+  expect(runningSimulation.chipMaterial.mode).toBe('steel');
+  expect(runningSimulation.chipMaterial.className).toBe('PBRMaterial');
+  expect(runningSimulation.chipMaterial.hasAlbedoTexture).toBe(true);
+  expect(runningSimulation.chipMaterial.hasBumpTexture).toBe(true);
+  expect(runningSimulation.chipMaterial.hasMetallicTexture).toBe(true);
+  expect(runningSimulation.chipMaterial.metallic).toBeGreaterThan(0.6);
+  expect(runningSimulation.chipMaterial.roughness).toBeGreaterThan(0.25);
+  expect(runningSimulation.chipMaterial.roughness).toBeLessThan(0.4);
+  expect(runningSimulation.chipMaterial.environmentIntensity).toBeGreaterThan(0.75);
+  expect(runningSimulation.chipMaterial.clearCoatEnabled).toBe(true);
+  expect(runningSimulation.chipMaterial.anisotropyEnabled).toBe(true);
+
+  const runningShadow = await page.evaluate(() => (window as any).rendererDemo.getShadowSummary());
+  expect(runningShadow.casterNames.some((name: string) => name.startsWith('toolpathChip_'))).toBe(true);
+
+  await page.click('#simulationResetBtn');
+  const resetSimulation = await page.evaluate(() => (
+    (window as any).rendererDemo.getToolpathSimulationSummary()
+  ));
+  expect(resetSimulation.isPlaying).toBe(false);
+  expect(resetSimulation.progress).toBe(0);
+  expect(resetSimulation.chipCount).toBe(0);
+
+  const resetShadow = await page.evaluate(() => (window as any).rendererDemo.getShadowSummary());
+  expect(resetShadow.casterNames.some((name: string) => name.startsWith('toolpathChip_'))).toBe(false);
+
+  const gcode = await page.evaluate(() => (window as any).rendererDemo.getToolpathGcode());
+  expect(gcode).toContain('(Strategy: simple facing raster)');
+  expect(gcode).toContain('G21');
+  expect(gcode).toContain('G1 Z');
+  expect(gcode).toContain('M30');
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.click('#gcodeExportBtn'),
+  ]);
+
+  expect(download.suggestedFilename()).toBe('default-cube-facing.nc');
+  await expect(download.failure()).resolves.toBeNull();
+
+  const downloadPath = await download.path();
+  expect(downloadPath).toBeTruthy();
+  expect(fs.readFileSync(downloadPath!, 'utf8')).toBe(gcode);
 });
 
 test('biases the grid range toward an offset model', async ({ page }) => {

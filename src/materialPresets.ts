@@ -6,6 +6,7 @@ import {
   RawCubeTexture,
   Scene,
   Texture,
+  Vector2,
 } from '@babylonjs/core';
 
 interface CamMaterialPreset {
@@ -41,12 +42,14 @@ export const CAM_MATERIAL_PRESETS = {
   },
   steel: {
     label: '钢',
-    albedoColor: [0.58, 0.6, 0.62],
-    metallic: 1,
-    roughness: 0.2,
-    environmentIntensity: 1.18,
-    directIntensity: 0.92,
-    specularIntensity: 0.95,
+    albedoColor: [0.72, 0.74, 0.76],
+    metallic: 0.68,
+    roughness: 0.34,
+    environmentIntensity: 0.82,
+    directIntensity: 1.25,
+    specularIntensity: 0.82,
+    clearCoatIntensity: 0.1,
+    clearCoatRoughness: 0.34,
   },
   graphite: {
     label: '石墨',
@@ -83,6 +86,7 @@ function toColor3(color: readonly [number, number, number]) {
 }
 
 interface SteelTextureSet {
+  albedo: DynamicTexture;
   normal: DynamicTexture;
   orm: DynamicTexture;
 }
@@ -117,15 +121,17 @@ function createReflectionFace(
     const v = size === 1 ? 0 : y / (size - 1);
     for (let x = 0; x < size; x += 1) {
       const u = size === 1 ? 0 : x / (size - 1);
-      const horizon = 0.12 * Math.exp(-((v - 0.55) ** 2) / 0.01);
-      const broadSoftbox = softBox(u, v, 0.28, 0.24, 0.22, 0.12) * 0.58;
-      const stripSoftbox = softBox(u, v, 0.72, 0.42, 0.12, 0.48) * 0.34;
-      const shade = 0.84 + horizon + broadSoftbox + stripSoftbox;
+      const horizon = 0.16 * Math.exp(-((v - 0.56) ** 2) / 0.012);
+      const broadSoftbox = softBox(u, v, 0.28, 0.2, 0.2, 0.1) * 1.08;
+      const stripSoftbox = softBox(u, v, 0.75, 0.42, 0.045, 0.52) * 0.96;
+      const longStrip = softBox(u, v, 0.48, 0.1, 0.42, 0.035) * 0.5;
+      const darkFlag = softBox(u, v, 0.54, 0.7, 0.52, 0.18) * 0.14;
+      const shade = 0.82 + horizon + broadSoftbox * 0.86 + stripSoftbox * 0.78 + longStrip - darkFlag;
       const offset = (y * size + x) * 3;
 
       for (let channel = 0; channel < 3; channel += 1) {
         const gradient = top[channel] * (1 - v) + bottom[channel] * v;
-        const color = gradient * shade + accent[channel] * (broadSoftbox * 0.45 + stripSoftbox * 0.25);
+        const color = gradient * shade + accent[channel] * (broadSoftbox * 0.34 + stripSoftbox * 0.42 + longStrip * 0.18);
         data[offset + channel] = Math.round(clamp01(color) * 255);
       }
     }
@@ -139,14 +145,14 @@ function ensureCamReflectionEnvironment(scene: Scene) {
     return;
   }
 
-  const size = 32;
+  const size = 64;
   const faceData = [
-    createReflectionFace(size, [0.9, 0.94, 1], [0.36, 0.38, 0.4], [1, 1, 0.92]),
-    createReflectionFace(size, [0.78, 0.82, 0.88], [0.28, 0.3, 0.33], [0.9, 0.96, 1]),
-    createReflectionFace(size, [0.96, 0.98, 1], [0.46, 0.48, 0.52], [1, 1, 1]),
-    createReflectionFace(size, [0.42, 0.43, 0.45], [0.18, 0.18, 0.2], [0.82, 0.86, 0.9]),
-    createReflectionFace(size, [0.86, 0.9, 0.96], [0.34, 0.36, 0.4], [0.95, 0.98, 1]),
-    createReflectionFace(size, [0.82, 0.82, 0.8], [0.3, 0.31, 0.34], [1, 0.94, 0.84]),
+    createReflectionFace(size, [0.96, 0.98, 1], [0.34, 0.37, 0.42], [1, 1, 0.9]),
+    createReflectionFace(size, [0.82, 0.88, 0.96], [0.26, 0.29, 0.35], [0.9, 0.97, 1]),
+    createReflectionFace(size, [0.98, 0.99, 1], [0.4, 0.43, 0.5], [1, 1, 1]),
+    createReflectionFace(size, [0.45, 0.48, 0.54], [0.22, 0.24, 0.28], [0.82, 0.9, 1]),
+    createReflectionFace(size, [0.9, 0.94, 1], [0.32, 0.35, 0.42], [0.96, 1, 1]),
+    createReflectionFace(size, [0.84, 0.84, 0.8], [0.3, 0.31, 0.34], [1, 0.9, 0.72]),
   ];
   const texture = new RawCubeTexture(
     scene,
@@ -161,21 +167,46 @@ function ensureCamReflectionEnvironment(scene: Scene) {
 
   texture.name = 'camStudioReflectionEnvironment';
   texture.gammaSpace = true;
-  texture.level = 0.82;
+  texture.level = 1;
   scene.environmentTexture = texture;
   camReflectionEnvironmentScenes.add(scene);
 }
 
 function steelHeightAt(x: number, y: number) {
   const rowNoise = hash2d(0, y * 0.39) - 0.5;
-  const fineGroove = Math.sin(y * 0.92 + rowNoise * 2.6) * 0.022;
-  const broadGroove = Math.sin(y * 0.13 + hash2d(7, Math.floor(y / 6)) * 3.14) * 0.018;
-  const scratch = hash2d(Math.floor(x * 0.22), Math.floor(y * 1.7)) > 0.985
-    ? 0.04 * Math.sin(x * 0.65)
+  const fineGroove = Math.sin(y * 1.25 + rowNoise * 1.7) * 0.0026;
+  const microGroove = Math.sin(y * 5.4 + hash2d(x * 0.03, y * 0.1) * 2.4) * 0.0012;
+  const broadGroove = Math.sin(y * 0.13 + hash2d(7, Math.floor(y / 10)) * 3.14) * 0.0024;
+  const scratch = hash2d(Math.floor(x * 0.19), Math.floor(y * 2.2)) > 0.992
+    ? 0.006 * Math.sin(x * 0.84)
     : 0;
-  const grain = (hash2d(x * 1.9, y * 0.27) - 0.5) * 0.012;
+  const grain = (hash2d(x * 2.7, y * 0.36) - 0.5) * 0.0015;
 
-  return fineGroove + broadGroove + scratch + grain;
+  return fineGroove + microGroove + broadGroove + scratch + grain;
+}
+
+function steelAlbedoAt(x: number, y: number, size: number) {
+  const u = x / size;
+  const v = y / size;
+  const lengthShade = 0.5 + 0.5 * Math.sin((v * 5.5 + hash2d(0, Math.floor(y / 18)) * 1.5) * Math.PI * 2);
+  const fineBrush = 0.5 + 0.5 * Math.sin((v * 46 + hash2d(Math.floor(x / 24), Math.floor(y / 7)) * 2.2) * Math.PI * 2);
+  const broadPanel = 0.5 + 0.5 * Math.sin((u * 2.4 + v * 0.34) * Math.PI * 2);
+  const scratch = hash2d(Math.floor(x * 0.52), Math.floor(y * 2.4)) > 0.992 ? 1 : 0;
+  const smudge = softBox(u, v, 0.62, 0.45, 0.28, 0.18) * 0.01;
+  const shade = clamp01(
+    0.96 +
+    lengthShade * 0.008 +
+    fineBrush * 0.007 +
+    broadPanel * 0.012 +
+    scratch * 0.018 -
+    smudge,
+  );
+
+  return [
+    clamp01(0.94 * shade + 0.015),
+    clamp01(0.965 * shade + 0.016),
+    clamp01(0.99 * shade + 0.018),
+  ] as const;
 }
 
 function createDynamicPixelTexture(
@@ -200,8 +231,8 @@ function createDynamicPixelTexture(
   texture.gammaSpace = false;
   texture.wrapU = Texture.WRAP_ADDRESSMODE;
   texture.wrapV = Texture.WRAP_ADDRESSMODE;
-  texture.uScale = 8;
-  texture.vScale = 18;
+  texture.uScale = 5;
+  texture.vScale = 28;
 
   return texture;
 }
@@ -213,9 +244,17 @@ function getSteelTextures(scene: Scene) {
   }
 
   const size = 256;
+  const albedo = createDynamicPixelTexture(scene, 'brushedSteelAlbedo', size, (x, y, data, offset) => {
+    const color = steelAlbedoAt(x, y, size);
+    data[offset] = Math.round(color[0] * 255);
+    data[offset + 1] = Math.round(color[1] * 255);
+    data[offset + 2] = Math.round(color[2] * 255);
+    data[offset + 3] = 255;
+  });
+
   const normal = createDynamicPixelTexture(scene, 'brushedSteelNormal', size, (x, y, data, offset) => {
-    const strengthX = 1.8;
-    const strengthY = 7.2;
+    const strengthX = 0.34;
+    const strengthY = 1.35;
     const dx = (steelHeightAt(x + 1, y) - steelHeightAt(x - 1, y)) * strengthX;
     const dy = (steelHeightAt(x, y + 1) - steelHeightAt(x, y - 1)) * strengthY;
     const length = Math.hypot(dx, dy, 1);
@@ -231,19 +270,24 @@ function getSteelTextures(scene: Scene) {
 
   const orm = createDynamicPixelTexture(scene, 'brushedSteelOrm', size, (x, y, data, offset) => {
     const groove = Math.abs(steelHeightAt(x, y));
-    const fingerprint = softBox(x / size, y / size, 0.64, 0.56, 0.22, 0.16) * 0.035;
-    const roughness = clamp01(0.17 + groove * 1.75 + fingerprint + (hash2d(x * 0.31, y * 0.47) - 0.5) * 0.025);
-    const occlusion = clamp01(0.94 - groove * 0.85 - fingerprint * 1.8);
+    const fingerprint = softBox(x / size, y / size, 0.64, 0.56, 0.22, 0.16) * 0.018;
+    const roughness = clamp01(0.32 + groove * 0.72 + fingerprint + (hash2d(x * 0.31, y * 0.47) - 0.5) * 0.01);
+    const occlusion = clamp01(0.995 - groove * 0.16 - fingerprint * 0.32);
+    const metalness = clamp01(0.72 + (hash2d(x * 0.19, y * 0.13) - 0.5) * 0.02);
 
     data[offset] = Math.round(occlusion * 255);
     data[offset + 1] = Math.round(roughness * 255);
-    data[offset + 2] = 255;
+    data[offset + 2] = Math.round(metalness * 255);
     data[offset + 3] = 255;
   });
 
-  normal.level = 0.07;
+  for (const texture of [albedo, normal, orm]) {
+    texture.anisotropicFilteringLevel = 8;
+  }
+  albedo.gammaSpace = true;
+  normal.level = 0.01;
 
-  const textures = { normal, orm };
+  const textures = { albedo, normal, orm };
   steelTextureCache.set(scene, textures);
   return textures;
 }
@@ -252,6 +296,7 @@ function applySteelFinish(scene: Scene, material: PBRMaterial) {
   ensureCamReflectionEnvironment(scene);
 
   const textures = getSteelTextures(scene);
+  material.albedoTexture = textures.albedo;
   material.bumpTexture = textures.normal;
   material.metallicTexture = textures.orm;
   material.useRoughnessFromMetallicTextureAlpha = false;
@@ -260,6 +305,12 @@ function applySteelFinish(scene: Scene, material: PBRMaterial) {
   material.useAmbientOcclusionFromMetallicTextureRed = true;
   material.enableSpecularAntiAliasing = true;
   material.useHorizonOcclusion = true;
+  material.metallicF0Factor = 0.78;
+  material.metallicReflectanceColor = new Color3(0.9, 0.93, 0.98);
+  material.anisotropy.isEnabled = true;
+  material.anisotropy.intensity = 0.46;
+  material.anisotropy.direction = new Vector2(1, 0);
+  material.brdf.useEnergyConservation = true;
 }
 
 export function createCamMaterialPreset(

@@ -41,7 +41,9 @@
       z-index: 10;
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 10px;
+      max-width: min(calc(100vw - 280px), 1180px);
       padding: 8px 12px;
       background: rgba(255, 255, 255, 0.94);
       border: 1px solid rgba(0, 0, 0, 0.1);
@@ -95,6 +97,48 @@
       color: #1f2937;
       font: inherit;
       cursor: pointer;
+    }
+    .toolbar-number {
+      width: 64px;
+      height: 30px;
+      padding: 0 8px;
+      border: 1px solid rgba(15, 23, 42, 0.18);
+      border-radius: 6px;
+      background: #fff;
+      color: #1f2937;
+      font: inherit;
+      font-size: 12px;
+    }
+    #toolpathGenerateBtn {
+      background: #0f766e;
+    }
+    #toolpathGenerateBtn:hover {
+      background: #115e59;
+    }
+    #gcodeExportBtn {
+      background: #7c3aed;
+    }
+    #gcodeExportBtn:hover {
+      background: #6d28d9;
+    }
+    #simulationPlayBtn {
+      background: #2563eb;
+    }
+    #simulationPlayBtn:hover {
+      background: #1d4ed8;
+    }
+    #simulationResetBtn {
+      background: #64748b;
+    }
+    #simulationResetBtn:hover {
+      background: #475569;
+    }
+    #toolpathSimStatus {
+      min-width: 42px;
+      color: #475569;
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
     }
     #materialPicker {
       position: relative;
@@ -226,9 +270,12 @@
     }
     #ioStatus {
       min-width: 220px;
+      max-width: 300px;
       font-size: 12px;
       color: #475569;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     #scaleBar {
       position: absolute;
@@ -267,6 +314,23 @@
       Unit
       <select id="unitSelect"></select>
     </label>
+    <label class="toolbar-field" for="toolDiameterInput">
+      Tool Dia
+      <input id="toolDiameterInput" class="toolbar-number" type="number" min="0.1" step="0.1" value="6">
+    </label>
+    <label class="toolbar-field" for="stepoverInput">
+      Step %
+      <input id="stepoverInput" class="toolbar-number" type="number" min="5" max="100" step="5" value="60">
+    </label>
+    <button id="toolpathGenerateBtn" class="toolbar-button" type="button">Toolpath</button>
+    <button id="gcodeExportBtn" class="toolbar-button" type="button" disabled>G-code</button>
+    <label class="toolbar-field" for="simulationSpeedInput">
+      Sim
+      <input id="simulationSpeedInput" class="toolbar-number" type="number" min="1" step="10" value="120">
+    </label>
+    <button id="simulationPlayBtn" class="toolbar-button" type="button" disabled>Simulate</button>
+    <button id="simulationResetBtn" class="toolbar-button" type="button" disabled>Reset</button>
+    <span id="toolpathSimStatus">0%</span>
     <div id="materialPicker">
       <button id="materialPickerBtn" class="toolbar-button secondary" type="button">材质：默认</button>
       <div id="materialPanel" role="dialog" aria-label="材质">
@@ -333,6 +397,8 @@
       DEFAULT_LENGTH_UNIT,
       GridMap,
       LENGTH_UNITS,
+      createFacingToolpath,
+      generateFacingGcode,
       getGridUnitOptions,
       getLengthUnitDefinition,
     } from './src/index.ts';
@@ -377,7 +443,59 @@
 
     const CAM_SSAO_PIPELINE_NAME = 'camSsaoPipeline';
     const isCamSsaoSupported = SSAO2RenderingPipeline.IsSupported;
+    const CAM_SSAO_DEFAULT_SETTINGS = {
+      samples: 16,
+      textureSamples: 1,
+      totalStrength: 0.68,
+      base: 0.08,
+      radiusScale: 0.16,
+      minRadius: 0.08,
+      maxRadius: 3.5,
+      minZAspect: 0.18,
+      epsilon: 0.035,
+      expensiveBlur: true,
+      bilateralSamples: 12,
+      bilateralSoften: 0.38,
+      bilateralTolerance: 0.45,
+    };
+    const CAM_SSAO_STEEL_SETTINGS = {
+      ...CAM_SSAO_DEFAULT_SETTINGS,
+      totalStrength: 0.52,
+      base: 0.06,
+      radiusScale: 0.13,
+      epsilon: 0.028,
+      bilateralSoften: 0.42,
+      bilateralTolerance: 0.52,
+    };
     let camSsaoPipeline = null;
+
+    function getCamSsaoSettings() {
+      return currentMaterialMode === 'steel'
+        ? CAM_SSAO_STEEL_SETTINGS
+        : CAM_SSAO_DEFAULT_SETTINGS;
+    }
+
+    function applyCamSsaoSettings() {
+      if (!camSsaoPipeline) {
+        return;
+      }
+
+      const settings = getCamSsaoSettings();
+      camSsaoPipeline.samples = settings.samples;
+      camSsaoPipeline.textureSamples = settings.textureSamples;
+      camSsaoPipeline.totalStrength = settings.totalStrength;
+      camSsaoPipeline.base = settings.base;
+      camSsaoPipeline.minZAspect = settings.minZAspect;
+      camSsaoPipeline.epsilon = settings.epsilon;
+      camSsaoPipeline.expensiveBlur = settings.expensiveBlur;
+      camSsaoPipeline.bilateralSamples = settings.bilateralSamples;
+      camSsaoPipeline.bilateralSoften = settings.bilateralSoften;
+      camSsaoPipeline.bilateralTolerance = settings.bilateralTolerance;
+
+      if (modelRoot) {
+        updateCamSsao(getModelBounds(modelRoot.getChildMeshes()));
+      }
+    }
 
     function ensureCamSsaoPipeline() {
       if (camSsaoPipeline || !isCamSsaoSupported) {
@@ -390,22 +508,9 @@
         { ssaoRatio: 0.75, blurRatio: 0.75 },
         null,
       );
-      camSsaoPipeline.samples = 16;
-      camSsaoPipeline.textureSamples = 1;
-      camSsaoPipeline.totalStrength = 0.68;
-      camSsaoPipeline.base = 0.08;
       camSsaoPipeline.radius = 0.45;
       camSsaoPipeline.maxZ = 80;
-      camSsaoPipeline.minZAspect = 0.18;
-      camSsaoPipeline.epsilon = 0.035;
-      camSsaoPipeline.expensiveBlur = true;
-      camSsaoPipeline.bilateralSamples = 12;
-      camSsaoPipeline.bilateralSoften = 0.38;
-      camSsaoPipeline.bilateralTolerance = 0.45;
-
-      if (modelRoot) {
-        updateCamSsao(getModelBounds(modelRoot.getChildMeshes()));
-      }
+      applyCamSsaoSettings();
 
       return camSsaoPipeline;
     }
@@ -559,6 +664,7 @@
     let currentMaterialMode = MATERIAL_MODES.DEFAULT;
     let activeOverrideMaterial = null;
     let ssaoEnabled = false;
+    let hasManualSsaoPreference = false;
     let shadowsEnabled = true;
 
     function getOverrideMaterialName(mode, name) {
@@ -595,14 +701,14 @@
       }
     }
 
-    function applySharedMaterialToRoot(root, material, { ensureUvs = false } = {}) {
+    function applySharedMaterialToRoot(root, material, { ensureUvs = false, forceUvs = false } = {}) {
       disposeActiveOverrideMaterial();
       captureDefaultMaterials(root);
       activeOverrideMaterial = material;
 
       for (const mesh of root.getChildMeshes()) {
         if (ensureUvs) {
-          ensureWalnutPbrUvs(mesh);
+          ensureWalnutPbrUvs(mesh, { force: forceUvs });
         }
         mesh.material = material;
       }
@@ -630,7 +736,10 @@
         const material = createCamMaterialPreset(scene, currentMaterialMode, {
           name: getOverrideMaterialName(currentMaterialMode, activeModelSummary?.name ?? root.name),
         });
-        applySharedMaterialToRoot(root, material, { ensureUvs: currentMaterialMode === 'steel' });
+        applySharedMaterialToRoot(root, material, {
+          ensureUvs: currentMaterialMode === 'steel',
+          forceUvs: currentMaterialMode === 'steel',
+        });
         return;
       }
 
@@ -659,6 +768,40 @@
       meshCount: 1,
       triangleCount: 12,
     };
+    const TOOLPATH_DEFAULTS = {
+      cutDepth: 1,
+      safeHeight: 5,
+      feedRate: 800,
+      plungeRate: 180,
+      spindleSpeed: 12000,
+    };
+    const TOOLPATH_SIMULATION_DEFAULTS = {
+      speed: 120,
+      toolHeight: 18,
+      chipSpawnSpacing: 2.5,
+      chipSize: 1.15,
+      chipEjectSpeed: 34,
+      chipUpwardSpeed: 18,
+      chipGravity: 42,
+      chipLifeSeconds: 1.8,
+      maxChips: 120,
+    };
+    const toolpathRoot = new TransformNode('toolpathRoot', scene);
+    let activeToolpathPlan = null;
+    let activeToolpathMeshes = [];
+    const toolpathSimulation = {
+      isPlaying: false,
+      moves: [],
+      totalDistance: 0,
+      currentDistance: 0,
+      toolRoot: null,
+      toolMeshes: [],
+      traceMesh: null,
+      lastTraceDistance: -1,
+      chips: [],
+      chipSerial: 0,
+      lastChipDistance: 0,
+    };
     let ioBusy = false;
     let ioStatusText = 'Ready.';
 
@@ -667,6 +810,14 @@
     const stepImportLabel = document.getElementById('stepImportLabel');
     const stepExportBtn = document.getElementById('stepExportBtn');
     const unitSelect = document.getElementById('unitSelect');
+    const toolDiameterInput = document.getElementById('toolDiameterInput');
+    const stepoverInput = document.getElementById('stepoverInput');
+    const toolpathGenerateBtn = document.getElementById('toolpathGenerateBtn');
+    const gcodeExportBtn = document.getElementById('gcodeExportBtn');
+    const simulationSpeedInput = document.getElementById('simulationSpeedInput');
+    const simulationPlayBtn = document.getElementById('simulationPlayBtn');
+    const simulationResetBtn = document.getElementById('simulationResetBtn');
+    const toolpathSimStatus = document.getElementById('toolpathSimStatus');
     const materialPickerBtn = document.getElementById('materialPickerBtn');
     const materialPanel = document.getElementById('materialPanel');
     const materialOptions = [...document.querySelectorAll('[data-material-mode]')];
@@ -685,6 +836,64 @@
       pixelWidth: 0,
     };
 
+    const simulationToolMaterial = new StandardMaterial('toolpathSimulationToolMaterial', scene);
+    simulationToolMaterial.diffuseColor = new Color3(0.12, 0.16, 0.22);
+    simulationToolMaterial.specularColor = new Color3(0.68, 0.72, 0.78);
+    simulationToolMaterial.specularPower = 72;
+
+    const simulationTipMaterial = new StandardMaterial('toolpathSimulationTipMaterial', scene);
+    simulationTipMaterial.diffuseColor = new Color3(0.96, 0.62, 0.16);
+    simulationTipMaterial.specularColor = new Color3(0.78, 0.62, 0.36);
+    simulationTipMaterial.specularPower = 64;
+
+    const defaultChipMaterial = new StandardMaterial('toolpathChipDefaultMaterial', scene);
+    defaultChipMaterial.diffuseColor = new Color3(0.26, 0.58, 0.82);
+    defaultChipMaterial.emissiveColor = new Color3(0.02, 0.06, 0.08);
+    defaultChipMaterial.specularColor = new Color3(0.34, 0.42, 0.48);
+    defaultChipMaterial.specularPower = 36;
+
+    const chipMaterials = new Map([[MATERIAL_MODES.DEFAULT, defaultChipMaterial]]);
+
+    function getChipMaterialMode() {
+      return MATERIAL_MODE_KEYS.includes(currentMaterialMode)
+        ? currentMaterialMode
+        : MATERIAL_MODES.DEFAULT;
+    }
+
+    function createChipMaterialForMode(mode) {
+      if (CAM_MATERIAL_PRESET_KEYS.includes(mode)) {
+        const material = createCamMaterialPreset(scene, mode, {
+          name: `toolpathChip_${mode}Pbr`,
+        });
+        material.alpha = 0.96;
+        return material;
+      }
+
+      if (mode === MATERIAL_MODES.WALNUT) {
+        return createWalnutPbrMaterial(scene, {
+          name: 'toolpathChip_walnutPbr',
+        });
+      }
+
+      return defaultChipMaterial;
+    }
+
+    function getActiveChipMaterial() {
+      const mode = getChipMaterialMode();
+      if (!chipMaterials.has(mode)) {
+        chipMaterials.set(mode, createChipMaterialForMode(mode));
+      }
+
+      return chipMaterials.get(mode) ?? defaultChipMaterial;
+    }
+
+    function applyChipMaterialToActiveChips() {
+      const material = getActiveChipMaterial();
+      for (const chip of toolpathSimulation.chips) {
+        chip.mesh.material = material;
+      }
+    }
+
     for (const unit of LENGTH_UNITS) {
       const option = document.createElement('option');
       option.value = unit.key;
@@ -697,6 +906,644 @@
     function setIoStatus(text) {
       ioStatusText = text;
       ioStatus.textContent = text;
+    }
+
+    function getSimulationProgress() {
+      if (toolpathSimulation.totalDistance <= 0) {
+        return 0;
+      }
+
+      return Math.min(1, Math.max(0, toolpathSimulation.currentDistance / toolpathSimulation.totalDistance));
+    }
+
+    function updateToolpathSimulationStatus() {
+      toolpathSimStatus.textContent = `${Math.round(getSimulationProgress() * 100)}%`;
+    }
+
+    function syncToolpathUi() {
+      const hasToolpath = Boolean(activeToolpathPlan);
+      toolDiameterInput.disabled = ioBusy;
+      stepoverInput.disabled = ioBusy;
+      toolpathGenerateBtn.disabled = ioBusy;
+      gcodeExportBtn.disabled = ioBusy || !activeToolpathPlan;
+      simulationSpeedInput.disabled = ioBusy || !hasToolpath;
+      simulationPlayBtn.disabled = ioBusy || !hasToolpath;
+      simulationResetBtn.disabled = ioBusy || !hasToolpath;
+      simulationPlayBtn.textContent = toolpathSimulation.isPlaying ? 'Pause' : 'Simulate';
+      updateToolpathSimulationStatus();
+    }
+
+    function disposeChipParticle(chip) {
+      camShadowGenerator.removeShadowCaster(chip.mesh, false);
+      chip.mesh.dispose();
+    }
+
+    function disposeChipParticles() {
+      for (const chip of toolpathSimulation.chips) {
+        disposeChipParticle(chip);
+      }
+
+      toolpathSimulation.chips = [];
+    }
+
+    function disposeToolpathSimulation() {
+      toolpathSimulation.isPlaying = false;
+      disposeChipParticles();
+
+      if (toolpathSimulation.traceMesh) {
+        toolpathSimulation.traceMesh.dispose();
+      }
+
+      for (const mesh of toolpathSimulation.toolMeshes) {
+        mesh.dispose();
+      }
+
+      if (toolpathSimulation.toolRoot) {
+        toolpathSimulation.toolRoot.dispose();
+      }
+
+      toolpathSimulation.moves = [];
+      toolpathSimulation.totalDistance = 0;
+      toolpathSimulation.currentDistance = 0;
+      toolpathSimulation.toolRoot = null;
+      toolpathSimulation.toolMeshes = [];
+      toolpathSimulation.traceMesh = null;
+      toolpathSimulation.lastTraceDistance = -1;
+      toolpathSimulation.chipSerial = 0;
+      toolpathSimulation.lastChipDistance = 0;
+      updateToolpathSimulationStatus();
+    }
+
+    function clearToolpath({ silent = true } = {}) {
+      disposeToolpathSimulation();
+
+      for (const mesh of activeToolpathMeshes) {
+        mesh.dispose();
+      }
+
+      activeToolpathMeshes = [];
+      activeToolpathPlan = null;
+      syncToolpathUi();
+
+      if (!silent) {
+        setIoStatus('Toolpath cleared.');
+      }
+    }
+
+    function getVectorDistance(start, end) {
+      return Vector3.Distance(start, end);
+    }
+
+    function addSimulationMove(moves, start, end, mode) {
+      const length = getVectorDistance(start, end);
+      if (length <= 1e-7) {
+        return;
+      }
+
+      const previousMove = moves[moves.length - 1];
+      const cumulativeStart = previousMove ? previousMove.cumulativeEnd : 0;
+      moves.push({
+        start,
+        end,
+        mode,
+        length,
+        cumulativeStart,
+        cumulativeEnd: cumulativeStart + length,
+      });
+    }
+
+    function buildSimulationMoves(plan) {
+      const firstPoint = plan.cutPoints[0];
+      const lastPoint = plan.cutPoints[plan.cutPoints.length - 1];
+      if (!firstPoint || !lastPoint) {
+        return [];
+      }
+
+      const displayHeights = getToolpathDisplayHeights(plan);
+      const moves = [];
+      const toCutVector = (point) => new Vector3(point.x, point.y, displayHeights.cutZ);
+      const toSafeVector = (point) => new Vector3(point.x, point.y, displayHeights.safeZ);
+
+      addSimulationMove(moves, toSafeVector(firstPoint), toCutVector(firstPoint), 'rapid');
+
+      for (let index = 1; index < plan.cutPoints.length; index += 1) {
+        addSimulationMove(
+          moves,
+          toCutVector(plan.cutPoints[index - 1]),
+          toCutVector(plan.cutPoints[index]),
+          'cut',
+        );
+      }
+
+      addSimulationMove(moves, toCutVector(lastPoint), toSafeVector(lastPoint), 'rapid');
+      return moves;
+    }
+
+    function getSimulationPointAtDistance(distance) {
+      const moves = toolpathSimulation.moves;
+      if (moves.length === 0) {
+        return Vector3.Zero();
+      }
+
+      if (distance <= 0) {
+        return moves[0].start.clone();
+      }
+
+      for (const move of moves) {
+        if (distance <= move.cumulativeEnd) {
+          const localDistance = distance - move.cumulativeStart;
+          const ratio = Math.min(1, Math.max(0, localDistance / move.length));
+          return Vector3.Lerp(move.start, move.end, ratio);
+        }
+      }
+
+      return moves[moves.length - 1].end.clone();
+    }
+
+    function getSimulationMoveAtDistance(distance) {
+      for (const move of toolpathSimulation.moves) {
+        if (distance >= move.cumulativeStart - 1e-7 && distance <= move.cumulativeEnd + 1e-7) {
+          return move;
+        }
+      }
+
+      return toolpathSimulation.moves[toolpathSimulation.moves.length - 1] ?? null;
+    }
+
+    function appendTracePoint(points, point) {
+      const lastPoint = points[points.length - 1];
+      if (!lastPoint || getVectorDistance(lastPoint, point) > 1e-7) {
+        points.push(point.clone());
+      }
+    }
+
+    function getCompletedCutTracePoints(distance) {
+      const points = [];
+
+      for (const move of toolpathSimulation.moves) {
+        if (move.mode !== 'cut' || distance <= move.cumulativeStart) {
+          continue;
+        }
+
+        appendTracePoint(points, move.start);
+
+        if (distance >= move.cumulativeEnd) {
+          appendTracePoint(points, move.end);
+          continue;
+        }
+
+        const localDistance = distance - move.cumulativeStart;
+        const ratio = Math.min(1, Math.max(0, localDistance / move.length));
+        appendTracePoint(points, Vector3.Lerp(move.start, move.end, ratio));
+        break;
+      }
+
+      return points;
+    }
+
+    function updateCompletedTrace({ force = false } = {}) {
+      const progressDelta = Math.abs(toolpathSimulation.currentDistance - toolpathSimulation.lastTraceDistance);
+      const traceThreshold = Math.max(0.01, toolpathSimulation.totalDistance * 0.003);
+
+      if (!force && progressDelta < traceThreshold) {
+        return;
+      }
+
+      if (toolpathSimulation.traceMesh) {
+        toolpathSimulation.traceMesh.dispose();
+        toolpathSimulation.traceMesh = null;
+      }
+
+      const tracePoints = getCompletedCutTracePoints(toolpathSimulation.currentDistance);
+      if (tracePoints.length > 1) {
+        const traceMesh = MeshBuilder.CreateLines('toolpathCompletedTrace', { points: tracePoints }, scene);
+        traceMesh.color = new Color3(0.12, 0.68, 0.36);
+        traceMesh.isPickable = false;
+        traceMesh.renderingGroupId = 2;
+        traceMesh.parent = toolpathRoot;
+        toolpathSimulation.traceMesh = traceMesh;
+      }
+
+      toolpathSimulation.lastTraceDistance = toolpathSimulation.currentDistance;
+    }
+
+    function getChipWorldValue(value) {
+      return Math.max(value / currentGridUnitOptions.coordinateScale, 1e-4);
+    }
+
+    function createChipParticle(origin, direction, moveIndex) {
+      const size = getChipWorldValue(TOOLPATH_SIMULATION_DEFAULTS.chipSize);
+      const chip = MeshBuilder.CreateBox(`toolpathChip_${toolpathSimulation.chipSerial}`, {
+        width: size * (0.45 + Math.random() * 0.55),
+        height: size * (0.16 + Math.random() * 0.22),
+        depth: size * (0.75 + Math.random() * 0.9),
+      }, scene);
+      toolpathSimulation.chipSerial += 1;
+
+      const tangent = direction.clone();
+      if (tangent.lengthSquared() < 1e-8) {
+        tangent.set(1, 0, 0);
+      }
+      tangent.normalize();
+
+      const side = Vector3.Cross(tangent, new Vector3(0, 0, 1));
+      if (side.lengthSquared() < 1e-8) {
+        side.set(0, 1, 0);
+      }
+      side.normalize();
+      side.scaleInPlace(moveIndex % 2 === 0 ? 1 : -1);
+
+      const sideJitter = (Math.random() - 0.5) * 0.75;
+      const ejection = side
+        .scale(0.82 + Math.random() * 0.42)
+        .add(tangent.scale(sideJitter))
+        .add(new Vector3(0, 0, 0.36 + Math.random() * 0.38));
+      ejection.normalize();
+
+      const ejectSpeed = getChipWorldValue(TOOLPATH_SIMULATION_DEFAULTS.chipEjectSpeed);
+      const upwardSpeed = getChipWorldValue(TOOLPATH_SIMULATION_DEFAULTS.chipUpwardSpeed);
+      const velocity = ejection.scale(ejectSpeed);
+      velocity.z += upwardSpeed * (0.55 + Math.random() * 0.7);
+
+      chip.position.copyFrom(origin);
+      chip.position.addInPlace(new Vector3(
+        (Math.random() - 0.5) * size,
+        (Math.random() - 0.5) * size,
+        size * 0.5,
+      ));
+      chip.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+      chip.material = getActiveChipMaterial();
+      chip.isPickable = false;
+      chip.receiveShadows = true;
+      chip.renderingGroupId = 2;
+      chip.parent = toolpathRoot;
+      camShadowGenerator.addShadowCaster(chip, false);
+
+      toolpathSimulation.chips.push({
+        mesh: chip,
+        velocity,
+        angularVelocity: new Vector3(
+          (Math.random() - 0.5) * 8,
+          (Math.random() - 0.5) * 8,
+          (Math.random() - 0.5) * 12,
+        ),
+        age: 0,
+        lifespan: TOOLPATH_SIMULATION_DEFAULTS.chipLifeSeconds * (0.75 + Math.random() * 0.45),
+      });
+
+      while (toolpathSimulation.chips.length > TOOLPATH_SIMULATION_DEFAULTS.maxChips) {
+        const oldestChip = toolpathSimulation.chips.shift();
+        if (oldestChip) {
+          disposeChipParticle(oldestChip);
+        }
+      }
+    }
+
+    function spawnCutChipsBetween(startDistance, endDistance) {
+      if (endDistance <= startDistance || toolpathSimulation.moves.length === 0) {
+        return;
+      }
+
+      const spacing = getChipWorldValue(TOOLPATH_SIMULATION_DEFAULTS.chipSpawnSpacing);
+      let nextDistance = Math.max(
+        toolpathSimulation.lastChipDistance + spacing,
+        startDistance,
+      );
+
+      for (let moveIndex = 0; moveIndex < toolpathSimulation.moves.length; moveIndex += 1) {
+        const move = toolpathSimulation.moves[moveIndex];
+        if (move.mode !== 'cut' || move.cumulativeEnd < nextDistance || move.cumulativeStart > endDistance) {
+          continue;
+        }
+
+        nextDistance = Math.max(nextDistance, move.cumulativeStart);
+        while (nextDistance <= Math.min(move.cumulativeEnd, endDistance) + 1e-7) {
+          const localDistance = nextDistance - move.cumulativeStart;
+          const ratio = Math.min(1, Math.max(0, localDistance / move.length));
+          const point = Vector3.Lerp(move.start, move.end, ratio);
+          createChipParticle(point, move.end.subtract(move.start), moveIndex);
+          toolpathSimulation.lastChipDistance = nextDistance;
+          nextDistance += spacing;
+        }
+      }
+    }
+
+    function updateChipParticles(deltaSeconds) {
+      if (toolpathSimulation.chips.length === 0) {
+        return;
+      }
+
+      const gravity = getChipWorldValue(TOOLPATH_SIMULATION_DEFAULTS.chipGravity);
+      const dt = Math.max(0, deltaSeconds);
+      const nextChips = [];
+
+      for (const chip of toolpathSimulation.chips) {
+        chip.age += dt;
+        chip.velocity.z -= gravity * dt;
+        chip.mesh.position.addInPlace(chip.velocity.scale(dt));
+        chip.mesh.rotation.x += chip.angularVelocity.x * dt;
+        chip.mesh.rotation.y += chip.angularVelocity.y * dt;
+        chip.mesh.rotation.z += chip.angularVelocity.z * dt;
+        chip.mesh.visibility = Math.max(0, 1 - (chip.age / chip.lifespan));
+
+        if (chip.age < chip.lifespan) {
+          nextChips.push(chip);
+        } else {
+          disposeChipParticle(chip);
+        }
+      }
+
+      toolpathSimulation.chips = nextChips;
+    }
+
+    function ensureSimulationTool(plan) {
+      if (toolpathSimulation.toolRoot) {
+        return;
+      }
+
+      const toolDiameterWorld = Math.max(plan.toolDiameter / currentGridUnitOptions.coordinateScale, 0.04);
+      const toolHeightWorld = Math.max(
+        TOOLPATH_SIMULATION_DEFAULTS.toolHeight / currentGridUnitOptions.coordinateScale,
+        toolDiameterWorld * 1.8,
+      );
+      const tipHeightWorld = Math.max(toolDiameterWorld * 0.12, 0.015);
+      const toolRootNode = new TransformNode('toolpathSimulationToolRoot', scene);
+      toolRootNode.parent = toolpathRoot;
+
+      const cutter = MeshBuilder.CreateCylinder('toolpathSimulationCutter', {
+        diameter: toolDiameterWorld,
+        height: toolHeightWorld,
+        tessellation: 32,
+      }, scene);
+      cutter.rotation.x = Math.PI / 2;
+      cutter.position.z = toolHeightWorld / 2;
+      cutter.material = simulationToolMaterial;
+      cutter.isPickable = false;
+      cutter.renderingGroupId = 2;
+      cutter.parent = toolRootNode;
+
+      const tip = MeshBuilder.CreateCylinder('toolpathSimulationTip', {
+        diameter: toolDiameterWorld * 1.06,
+        height: tipHeightWorld,
+        tessellation: 32,
+      }, scene);
+      tip.rotation.x = Math.PI / 2;
+      tip.position.z = tipHeightWorld / 2;
+      tip.material = simulationTipMaterial;
+      tip.isPickable = false;
+      tip.renderingGroupId = 2;
+      tip.parent = toolRootNode;
+
+      toolpathSimulation.toolRoot = toolRootNode;
+      toolpathSimulation.toolMeshes = [cutter, tip];
+    }
+
+    function updateSimulationToolPosition() {
+      if (!toolpathSimulation.toolRoot) {
+        return;
+      }
+
+      toolpathSimulation.toolRoot.position.copyFrom(
+        getSimulationPointAtDistance(toolpathSimulation.currentDistance),
+      );
+    }
+
+    function prepareToolpathSimulation(plan) {
+      disposeToolpathSimulation();
+      toolpathSimulation.moves = buildSimulationMoves(plan);
+      const finalMove = toolpathSimulation.moves[toolpathSimulation.moves.length - 1];
+      toolpathSimulation.totalDistance = finalMove?.cumulativeEnd ?? 0;
+      toolpathSimulation.currentDistance = 0;
+      ensureSimulationTool(plan);
+      updateSimulationToolPosition();
+      updateCompletedTrace({ force: true });
+      toolpathSimulation.lastChipDistance = 0;
+      syncToolpathUi();
+    }
+
+    function resetToolpathSimulation({ silent = false } = {}) {
+      if (!activeToolpathPlan) {
+        return;
+      }
+
+      if (toolpathSimulation.moves.length === 0) {
+        prepareToolpathSimulation(activeToolpathPlan);
+      }
+
+      toolpathSimulation.isPlaying = false;
+      toolpathSimulation.currentDistance = 0;
+      toolpathSimulation.lastChipDistance = 0;
+      disposeChipParticles();
+      updateSimulationToolPosition();
+      updateCompletedTrace({ force: true });
+      syncToolpathUi();
+
+      if (!silent) {
+        setIoStatus('Simulation reset.');
+      }
+    }
+
+    function toggleToolpathSimulation() {
+      if (!activeToolpathPlan) {
+        return;
+      }
+
+      if (toolpathSimulation.moves.length === 0) {
+        prepareToolpathSimulation(activeToolpathPlan);
+      }
+
+      if (!toolpathSimulation.isPlaying && getSimulationProgress() >= 1) {
+        toolpathSimulation.currentDistance = 0;
+        toolpathSimulation.lastChipDistance = 0;
+        disposeChipParticles();
+        updateCompletedTrace({ force: true });
+      }
+
+      toolpathSimulation.isPlaying = !toolpathSimulation.isPlaying;
+      syncToolpathUi();
+      setIoStatus(toolpathSimulation.isPlaying ? 'Simulation running.' : 'Simulation paused.');
+    }
+
+    function updateToolpathSimulation(deltaSeconds) {
+      if (!toolpathSimulation.isPlaying || toolpathSimulation.totalDistance <= 0) {
+        return;
+      }
+
+      const speed = readPositiveInput(simulationSpeedInput, TOOLPATH_SIMULATION_DEFAULTS.speed);
+      const worldSpeed = speed / currentGridUnitOptions.coordinateScale;
+      const previousDistance = toolpathSimulation.currentDistance;
+      toolpathSimulation.currentDistance = Math.min(
+        toolpathSimulation.totalDistance,
+        toolpathSimulation.currentDistance + (worldSpeed * Math.max(0, deltaSeconds)),
+      );
+
+      spawnCutChipsBetween(previousDistance, toolpathSimulation.currentDistance);
+      updateSimulationToolPosition();
+      updateCompletedTrace();
+      syncToolpathUi();
+
+      if (toolpathSimulation.currentDistance >= toolpathSimulation.totalDistance - 1e-7) {
+        toolpathSimulation.isPlaying = false;
+        updateCompletedTrace({ force: true });
+        syncToolpathUi();
+        setIoStatus('Simulation complete.');
+      }
+    }
+
+    function readPositiveInput(input, fallback) {
+      const value = Number(input.value);
+      if (Number.isFinite(value) && value > 0) {
+        return value;
+      }
+
+      input.value = String(fallback);
+      return fallback;
+    }
+
+    function getToolpathBounds() {
+      const bounds = getModelBounds(modelRoot.getChildMeshes());
+      if (!bounds) {
+        throw new Error('No model is available for toolpath generation.');
+      }
+
+      return {
+        minX: bounds.min.x,
+        maxX: bounds.max.x,
+        minY: bounds.min.y,
+        maxY: bounds.max.y,
+        minZ: bounds.min.z,
+        maxZ: bounds.max.z,
+      };
+    }
+
+    function getToolpathDisplayHeights(plan) {
+      const footprint = Math.max(
+        plan.bounds.maxX - plan.bounds.minX,
+        plan.bounds.maxY - plan.bounds.minY,
+        1,
+      );
+      const offset = Math.max(0.03, footprint * 0.015);
+
+      return {
+        cutZ: plan.bounds.maxZ + offset,
+        safeZ: plan.bounds.maxZ + offset * 4,
+      };
+    }
+
+    function renderToolpathPlan(plan) {
+      clearToolpath({ silent: true });
+
+      const displayHeights = getToolpathDisplayHeights(plan);
+      const cutPoints = plan.cutPoints.map((point) => (
+        new Vector3(point.x, point.y, displayHeights.cutZ)
+      ));
+      const rapidLines = plan.rapidSegments.map((segment) => ([
+        new Vector3(segment.start.x, segment.start.y, displayHeights.safeZ),
+        new Vector3(segment.end.x, segment.end.y, displayHeights.cutZ),
+      ]));
+
+      if (cutPoints.length > 1) {
+        const cutLine = MeshBuilder.CreateLines('toolpathCutLine', { points: cutPoints }, scene);
+        cutLine.color = new Color3(0.93, 0.36, 0.08);
+        cutLine.isPickable = false;
+        cutLine.renderingGroupId = 2;
+        cutLine.parent = toolpathRoot;
+        activeToolpathMeshes.push(cutLine);
+      }
+
+      if (rapidLines.length > 0) {
+        const rapidLine = MeshBuilder.CreateLineSystem('toolpathRapidLine', { lines: rapidLines }, scene);
+        rapidLine.color = new Color3(0.18, 0.38, 0.78);
+        rapidLine.isPickable = false;
+        rapidLine.renderingGroupId = 2;
+        rapidLine.parent = toolpathRoot;
+        activeToolpathMeshes.push(rapidLine);
+      }
+    }
+
+    function getToolpathOptions() {
+      const toolDiameter = readPositiveInput(toolDiameterInput, 6);
+      const stepoverPercent = Math.min(100, Math.max(5, readPositiveInput(stepoverInput, 60)));
+      stepoverInput.value = String(stepoverPercent);
+
+      return {
+        bounds: getToolpathBounds(),
+        coordinateScale: currentGridUnitOptions.coordinateScale,
+        toolDiameter,
+        stepoverRatio: stepoverPercent / 100,
+        cutDepth: TOOLPATH_DEFAULTS.cutDepth,
+        safeHeight: TOOLPATH_DEFAULTS.safeHeight,
+      };
+    }
+
+    function generateToolpath() {
+      try {
+        const plan = createFacingToolpath(getToolpathOptions());
+        renderToolpathPlan(plan);
+        activeToolpathPlan = plan;
+        prepareToolpathSimulation(plan);
+        syncToolpathUi();
+
+        const cutLength = plan.totalCutDistance * currentGridUnitOptions.coordinateScale;
+        setIoStatus(
+          `Toolpath generated: ${plan.rowCount} passes, ${formatScaleBarValue(cutLength)} ${currentGridUnitOptions.unitLabel}.`,
+        );
+
+        return plan;
+      } catch (error) {
+        console.error(error);
+        setIoStatus(error instanceof Error ? error.message : 'Failed to generate toolpath.');
+        return null;
+      }
+    }
+
+    function getGcodeFileStem() {
+      return activeModelSummary.name
+        .replace(/\.[^.]+$/, '')
+        .replace(/[^a-z0-9_-]+/gi, '-')
+        .replace(/^-+|-+$/g, '') || 'model';
+    }
+
+    function getActiveToolpathGcode() {
+      if (!activeToolpathPlan) {
+        throw new Error('Generate a toolpath before exporting G-code.');
+      }
+
+      const unit = getLengthUnitDefinition(currentUnit);
+      return generateFacingGcode(activeToolpathPlan, {
+        coordinateScale: currentGridUnitOptions.coordinateScale,
+        millimetersPerUnit: unit.millimetersPerUnit,
+        programName: `${getGcodeFileStem()}-facing`,
+        feedRate: TOOLPATH_DEFAULTS.feedRate,
+        plungeRate: TOOLPATH_DEFAULTS.plungeRate,
+        spindleSpeed: TOOLPATH_DEFAULTS.spindleSpeed,
+      });
+    }
+
+    function downloadTextFile(fileName, text, mimeType) {
+      const blob = new Blob([text], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+
+      anchor.href = url;
+      anchor.download = fileName;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    function exportToolpathGcode() {
+      try {
+        const gcode = getActiveToolpathGcode();
+        const fileName = `${getGcodeFileStem()}-facing.nc`;
+        downloadTextFile(fileName, gcode, 'text/plain;charset=utf-8');
+        setIoStatus(`Exported ${fileName}.`);
+      } catch (error) {
+        console.error(error);
+        setIoStatus(error instanceof Error ? error.message : 'Failed to export G-code.');
+      }
     }
 
     function syncRenderSwitchUi() {
@@ -712,6 +1559,10 @@
     function setSsaoEnabled(enabled, { silent = false } = {}) {
       const pipeline = enabled ? ensureCamSsaoPipeline() : camSsaoPipeline;
       const nextEnabled = Boolean(enabled && pipeline);
+
+      if (pipeline && nextEnabled) {
+        applyCamSsaoSettings();
+      }
 
       if (pipeline && ssaoEnabled !== nextEnabled) {
         const pipelineManager = scene.postProcessRenderPipelineManager;
@@ -729,6 +1580,16 @@
         setIoStatus(isCamSsaoSupported
           ? `SSAO ${ssaoEnabled ? 'enabled' : 'disabled'}.`
           : 'SSAO is not supported.');
+      }
+    }
+
+    function syncMaterialViewportEnhancement() {
+      if (ssaoEnabled) {
+        applyCamSsaoSettings();
+      }
+
+      if (!hasManualSsaoPreference) {
+        setSsaoEnabled(currentMaterialMode === 'steel', { silent: true });
       }
     }
 
@@ -750,6 +1611,7 @@
       unitSelect.disabled = busy;
       materialPickerBtn.disabled = busy;
       stepImportLabel.classList.toggle('is-disabled', busy);
+      syncToolpathUi();
       syncRenderSwitchUi();
     }
 
@@ -758,8 +1620,10 @@
       currentUnit = nextUnit;
       currentGridUnitOptions = getGridUnitOptions(currentUnit);
       unitSelect.value = currentUnit;
+      clearToolpath({ silent: true });
       gridMap.setUnitOptions(currentGridUnitOptions);
       fitCameraToModel(modelRoot.getChildMeshes());
+      syncGridElevationToModel();
       gridMap.fitToMeshes(modelRoot.getChildMeshes());
       gridMap.update();
       updateScaleBar();
@@ -768,6 +1632,30 @@
 
     unitSelect.addEventListener('change', () => {
       setProjectUnit(unitSelect.value);
+    });
+
+    toolpathGenerateBtn.addEventListener('click', () => {
+      if (!ioBusy) {
+        generateToolpath();
+      }
+    });
+
+    gcodeExportBtn.addEventListener('click', () => {
+      if (!ioBusy) {
+        exportToolpathGcode();
+      }
+    });
+
+    simulationPlayBtn.addEventListener('click', () => {
+      if (!ioBusy) {
+        toggleToolpathSimulation();
+      }
+    });
+
+    simulationResetBtn.addEventListener('click', () => {
+      if (!ioBusy) {
+        resetToolpathSimulation();
+      }
     });
 
     function updateMaterialPickerUi() {
@@ -794,6 +1682,8 @@
 
       currentMaterialMode = mode;
       applyMaterialModeToRoot(modelRoot);
+      applyChipMaterialToActiveChips();
+      syncMaterialViewportEnhancement();
       updateMaterialPickerUi();
       setMaterialPanelOpen(false);
       setIoStatus(`材质已设置为${MATERIAL_MODE_LABELS[currentMaterialMode]}。`);
@@ -830,6 +1720,7 @@
     });
 
     ssaoToggle.addEventListener('change', () => {
+      hasManualSsaoPreference = true;
       setSsaoEnabled(ssaoToggle.checked);
     });
 
@@ -838,6 +1729,7 @@
     });
 
     updateMaterialPickerUi();
+    syncToolpathUi();
     syncRenderSwitchUi();
 
     function getModelBounds(meshes) {
@@ -873,12 +1765,28 @@
       };
     }
 
+    function getGridElevationForBounds(bounds) {
+      const thickness = Math.max(bounds.max.z - bounds.min.z, 1e-3);
+      const footprint = Math.max(bounds.max.x - bounds.min.x, bounds.max.y - bounds.min.y, 1e-3);
+      const padding = Math.max(0.012, Math.min(0.16, Math.max(thickness, footprint) * 0.012));
+      return bounds.min.z - padding;
+    }
+
+    function syncGridElevationToModel() {
+      const bounds = getModelBounds(modelRoot.getChildMeshes());
+      gridMap.setElevation(bounds ? getGridElevationForBounds(bounds) : 0);
+    }
+
     function updateCamSsao(bounds) {
       if (!camSsaoPipeline || !bounds) {
         return;
       }
 
-      camSsaoPipeline.radius = Math.max(0.08, Math.min(3.5, bounds.boundingRadius * 0.16));
+      const settings = getCamSsaoSettings();
+      camSsaoPipeline.radius = Math.max(
+        settings.minRadius,
+        Math.min(settings.maxRadius, bounds.boundingRadius * settings.radiusScale),
+      );
       camSsaoPipeline.maxZ = Math.max(20, camera.radius * 2.8, bounds.boundingRadius * 5);
     }
 
@@ -1040,6 +1948,8 @@
     }
 
     function updateActiveModel(root, summary, name) {
+      clearToolpath({ silent: true });
+
       if (modelRoot) {
         disposeStoredDefaultMaterials(modelRoot);
         modelRoot.dispose(false, true);
@@ -1055,18 +1965,25 @@
         triangleCount: summary.triangleCount,
       };
       applyMaterialModeToRoot(modelRoot);
+      syncMaterialViewportEnhancement();
 
       fitCameraToModel(modelRoot.getChildMeshes());
+      syncGridElevationToModel();
       gridMap.fitToMeshes(modelRoot.getChildMeshes());
       syncCamShadowCasters(modelRoot);
     }
 
     applyMaterialModeToRoot(modelRoot);
+    syncMaterialViewportEnhancement();
     fitCameraToModel(modelRoot.getChildMeshes());
+    syncGridElevationToModel();
     gridMap.fitToMeshes(modelRoot.getChildMeshes());
     syncCamShadowCasters(modelRoot);
 
     engine.runRenderLoop(() => {
+      const deltaSeconds = engine.getDeltaTime() / 1000;
+      updateToolpathSimulation(deltaSeconds);
+      updateChipParticles(deltaSeconds);
       updateCamViewportLights();
       gridMap.update();
       updateScaleBar();
@@ -1149,7 +2066,12 @@
           metallic: material?.metallic ?? null,
           roughness: material?.roughness ?? null,
           environmentIntensity: material?.environmentIntensity ?? null,
+          directIntensity: material?.directIntensity ?? null,
+          specularIntensity: material?.specularIntensity ?? null,
           clearCoatEnabled: Boolean(material?.clearCoat?.isEnabled),
+          clearCoatIntensity: material?.clearCoat?.intensity ?? null,
+          anisotropyEnabled: Boolean(material?.anisotropy?.isEnabled),
+          anisotropyIntensity: material?.anisotropy?.intensity ?? null,
         };
       },
       setMaterialMode: (mode) => setMaterialMode(mode),
@@ -1226,9 +2148,85 @@
         bilateralTolerance: camSsaoPipeline?.bilateralTolerance ?? 0,
       }),
       setSsaoEnabled: (enabled) => setSsaoEnabled(enabled),
+      generateToolpath: () => generateToolpath(),
+      clearToolpath: () => clearToolpath({ silent: false }),
+      getToolpathGcode: () => getActiveToolpathGcode(),
+      startToolpathSimulation: () => {
+        if (!toolpathSimulation.isPlaying) {
+          toggleToolpathSimulation();
+        }
+      },
+      pauseToolpathSimulation: () => {
+        if (toolpathSimulation.isPlaying) {
+          toggleToolpathSimulation();
+        }
+      },
+      resetToolpathSimulation: () => resetToolpathSimulation({ silent: true }),
+      getToolpathSummary: () => {
+        if (!activeToolpathPlan) {
+          return null;
+        }
+
+        return {
+          strategy: activeToolpathPlan.strategy,
+          rowCount: activeToolpathPlan.rowCount,
+          cutPointCount: activeToolpathPlan.cutPoints.length,
+          rapidSegmentCount: activeToolpathPlan.rapidSegments.length,
+          toolDiameter: activeToolpathPlan.toolDiameter,
+          stepover: activeToolpathPlan.stepover,
+          stepoverRatio: activeToolpathPlan.stepoverRatio,
+          cutDepth: activeToolpathPlan.cutDepth,
+          safeHeight: activeToolpathPlan.safeHeight,
+          unitLabel: currentGridUnitOptions.unitLabel,
+          cutLength: activeToolpathPlan.totalCutDistance * currentGridUnitOptions.coordinateScale,
+          rapidLength: activeToolpathPlan.totalRapidDistance * currentGridUnitOptions.coordinateScale,
+          meshNames: activeToolpathMeshes.map((mesh) => mesh.name),
+        };
+      },
+      getToolpathSimulationSummary: () => ({
+        enabled: Boolean(activeToolpathPlan),
+        isPlaying: toolpathSimulation.isPlaying,
+        moveCount: toolpathSimulation.moves.length,
+        progress: getSimulationProgress(),
+        currentDistance: toolpathSimulation.currentDistance * currentGridUnitOptions.coordinateScale,
+        totalDistance: toolpathSimulation.totalDistance * currentGridUnitOptions.coordinateScale,
+        toolPosition: toolpathSimulation.toolRoot
+          ? {
+            x: toolpathSimulation.toolRoot.position.x,
+            y: toolpathSimulation.toolRoot.position.y,
+            z: toolpathSimulation.toolRoot.position.z,
+          }
+          : null,
+        traceName: toolpathSimulation.traceMesh?.name ?? '',
+        toolMeshNames: toolpathSimulation.toolMeshes.map((mesh) => mesh.name),
+        currentMoveMode: getSimulationMoveAtDistance(toolpathSimulation.currentDistance)?.mode ?? '',
+        chipCount: toolpathSimulation.chips.length,
+        chipMeshNames: toolpathSimulation.chips.map((chip) => chip.mesh.name),
+        chipMaterial: (() => {
+          const material = toolpathSimulation.chips[0]?.mesh.material ?? getActiveChipMaterial();
+          return {
+            mode: getChipMaterialMode(),
+            name: material?.name ?? '',
+            className: material?.getClassName?.() ?? '',
+            hasAlbedoTexture: Boolean(material?.albedoTexture),
+            hasBumpTexture: Boolean(material?.bumpTexture),
+            hasMetallicTexture: Boolean(material?.metallicTexture),
+            albedoColor: material?.albedoColor?.toHexString?.() ?? material?.diffuseColor?.toHexString?.() ?? '',
+            metallic: material?.metallic ?? null,
+            roughness: material?.roughness ?? null,
+            environmentIntensity: material?.environmentIntensity ?? null,
+            clearCoatEnabled: Boolean(material?.clearCoat?.isEnabled),
+            anisotropyEnabled: Boolean(material?.anisotropy?.isEnabled),
+            specularPower: material?.specularPower ?? null,
+          };
+        })(),
+        speed: Number(simulationSpeedInput.value),
+      }),
       offsetModel: ({ x = 0, y = 0, z = 0 }) => {
+        clearToolpath({ silent: true });
         modelRoot.position.set(x, y, z);
         fitCameraToModel(modelRoot.getChildMeshes());
+        syncGridElevationToModel();
         gridMap.fitToMeshes(modelRoot.getChildMeshes());
         updateCamShadowGround();
       },

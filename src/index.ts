@@ -6,6 +6,10 @@ export {
   getGridUnitOptions,
   getLengthUnitDefinition,
 } from './units';
+export {
+  createFacingToolpath,
+  generateFacingGcode,
+} from './toolpath';
 export type {
   CubeViewChangePhase,
   CubeViewChangeSource,
@@ -25,3 +29,11 @@ export type {
   LengthUnit,
   LengthUnitDefinition,
 } from './units';
+export type {
+  FacingGcodeOptions,
+  FacingToolpathOptions,
+  FacingToolpathPlan,
+  ToolpathBounds,
+  ToolpathPoint,
+  ToolpathSegment,
+} from './toolpath';
