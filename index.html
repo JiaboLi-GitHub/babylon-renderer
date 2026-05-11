@@ -1994,7 +1994,9 @@
           normalWorld: serializeVector3(candidate.normalWorld),
         })),
         hoveredCandidateId: state.hoveredCandidateId,
+        hoveredAxisId: state.hoveredAxisId,
         selectedCandidateId: state.selectedCandidateId,
+        activeRotationAxisId: state.activeRotationAxisId,
         selection: state.selection
           ? {
             id: state.selection.id,
@@ -2032,6 +2034,27 @@
       }
 
       return serializeVector3(projectToScreen(candidate.positionWorld));
+    }
+
+    function getWorkpieceOriginAxisScreenPosition(axisId) {
+      const state = workpieceOriginSelector.getState();
+      if (!state.axisPreview) {
+        return null;
+      }
+
+      const axisById = {
+        x: state.axisPreview.axisXWorld,
+        y: state.axisPreview.axisYWorld,
+        z: state.axisPreview.axisZWorld,
+      };
+      const axis = axisById[axisId];
+      if (!axis) {
+        return null;
+      }
+
+      const origin = state.axisPreview.originWorld;
+      const point = origin.add(axis.scale(state.axisPreview.axisLengthWorld * 0.08));
+      return serializeVector3(projectToScreen(point));
     }
 
     // Expose for e2e tests
@@ -2082,7 +2105,9 @@
       getGridSummary: () => ({ ...gridMap.getState() }),
       getWorkpieceOriginSelectorSummary,
       getWorkpieceOriginCandidateScreenPosition,
+      getWorkpieceOriginAxisScreenPosition,
       selectWorkpieceOriginCandidate: (id) => workpieceOriginSelector.selectCandidateById(id),
+      selectWorkpieceOriginAxis: (axisId) => workpieceOriginSelector.selectAxisById(axisId),
       clearWorkpieceOriginSelection: () => workpieceOriginSelector.clearSelection(),
       setWorkpieceOriginEnabled: (enabled) => setWorkpieceOriginEnabled(enabled, { silent: true }),
       getGridLabelNames: () => scene.meshes

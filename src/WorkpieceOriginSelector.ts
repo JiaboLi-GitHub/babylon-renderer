@@ -3,11 +3,13 @@ import {
   Camera,
   Color3,
   LinesMesh,
+  Matrix,
   Mesh,
   MeshBuilder,
   Observer,
   PointerEventTypes,
   PointerInfo,
+  Quaternion,
   Scene,
   StandardMaterial,
   TransformNode,
@@ -15,6 +17,7 @@ import {
 } from '@babylonjs/core';
 
 export type WorkpieceOriginCandidateKind = 'corner' | 'edge-center' | 'face-center';
+export type WorkpieceOriginAxisId = 'x' | 'y' | 'z';
 
 export interface WorkpieceOriginCandidate {
   id: string;
@@ -58,7 +61,9 @@ export interface WorkpieceOriginSelectorState {
   boundsWorld: WorkpieceBoundsWorld | null;
   candidates: WorkpieceOriginCandidate[];
   hoveredCandidateId: string | null;
+  hoveredAxisId: WorkpieceOriginAxisId | null;
   selectedCandidateId: string | null;
+  activeRotationAxisId: WorkpieceOriginAxisId | null;
   selection: WorkpieceOriginSelection | null;
   axisPreview: WorkpieceOriginAxisPreview | null;
 }
@@ -127,6 +132,18 @@ const DEFAULT_CONFIG: Omit<WorkpieceOriginSelectorConfig, 'candidateKinds'> & {
 const BOUND_EPSILON = 1e-9;
 const CLICK_MOVE_THRESHOLD_PIXELS = 4;
 const MIN_SAFE_THICKNESS_WORLD = 1e-4;
+const AXIS_IDS: WorkpieceOriginAxisId[] = ['x', 'y', 'z'];
+const AXIS_COLORS: Record<WorkpieceOriginAxisId, Color3> = {
+  x: new Color3(0.95, 0.12, 0.12),
+  y: new Color3(0.16, 0.68, 0.18),
+  z: new Color3(0.1, 0.32, 1),
+};
+const AXIS_EMISSIVE_COLORS: Record<WorkpieceOriginAxisId, Color3> = {
+  x: new Color3(0.55, 0.02, 0.02),
+  y: new Color3(0.02, 0.36, 0.04),
+  z: new Color3(0.02, 0.08, 0.58),
+};
+const WORKPIECE_AXIS_ROTATION_STEP_RADIANS = Math.PI / 2;
 
 export class WorkpieceOriginSelector {
   private readonly scene: Scene;
@@ -142,10 +159,11 @@ export class WorkpieceOriginSelector {
   private readonly axisXMaterial: StandardMaterial;
   private readonly axisYMaterial: StandardMaterial;
   private readonly axisZMaterial: StandardMaterial;
+  private readonly axisMaterials: Record<WorkpieceOriginAxisId, StandardMaterial>;
   private readonly onOriginChange?: (selection: WorkpieceOriginSelection | null) => void;
   private readonly onStateChange?: (state: WorkpieceOriginSelectorState) => void;
   private readonly handleCanvasPointerLeave = () => {
-    this.setHoveredCandidate(null);
+    this.setHoverTargets(null, null);
   };
   private readonly axisPreviewMeshes: AbstractMesh[] = [];
 
@@ -153,12 +171,18 @@ export class WorkpieceOriginSelector {
   private boundsWorld: WorkpieceBoundsWorld | null = null;
   private candidates: WorkpieceOriginCandidate[] = [];
   private hoveredCandidateId: string | null = null;
+  private hoveredAxisId: WorkpieceOriginAxisId | null = null;
   private selectedCandidateId: string | null = null;
+  private axisXWorld = new Vector3(1, 0, 0);
+  private axisYWorld = new Vector3(0, 1, 0);
+  private axisZWorld = new Vector3(0, 0, 1);
+  private activeRotationAxisId: WorkpieceOriginAxisId | null = null;
   private pointerObserver: Observer<PointerInfo> | null = null;
   private pointerDown: {
     x: number;
     y: number;
-    candidateId: string | null;
+    targetType: 'candidate' | 'axis' | null;
+    targetId: string | null;
   } | null = null;
 
   constructor(options: WorkpieceOriginSelectorOptions) {
@@ -211,19 +235,24 @@ export class WorkpieceOriginSelector {
     );
     this.axisXMaterial = this.createCandidateMaterial(
       'workpieceOriginSelector.axisXMaterial',
-      new Color3(0.95, 0.12, 0.12),
-      new Color3(0.55, 0.02, 0.02),
+      AXIS_COLORS.x,
+      AXIS_EMISSIVE_COLORS.x,
     );
     this.axisYMaterial = this.createCandidateMaterial(
       'workpieceOriginSelector.axisYMaterial',
-      new Color3(0.16, 0.68, 0.18),
-      new Color3(0.02, 0.36, 0.04),
+      AXIS_COLORS.y,
+      AXIS_EMISSIVE_COLORS.y,
     );
     this.axisZMaterial = this.createCandidateMaterial(
       'workpieceOriginSelector.axisZMaterial',
-      new Color3(0.1, 0.32, 1),
-      new Color3(0.02, 0.08, 0.58),
+      AXIS_COLORS.z,
+      AXIS_EMISSIVE_COLORS.z,
     );
+    this.axisMaterials = {
+      x: this.axisXMaterial,
+      y: this.axisYMaterial,
+      z: this.axisZMaterial,
+    };
 
     this.pointerObserver = this.scene.onPointerObservable.add((pointerInfo) => {
       this.handlePointer(pointerInfo);
@@ -254,7 +283,7 @@ export class WorkpieceOriginSelector {
     this.root.setEnabled(nextEnabled);
     if (!nextEnabled) {
       this.pointerDown = null;
-      this.setHoveredCandidate(null);
+      this.setHoverTargets(null, null);
     }
     this.emitState();
   }
@@ -278,7 +307,10 @@ export class WorkpieceOriginSelector {
   clearSelection(options: { emit?: boolean } = {}) {
     const hadSelection = this.selectedCandidateId !== null;
     this.hoveredCandidateId = null;
+    this.hoveredAxisId = null;
     this.selectedCandidateId = null;
+    this.resetAxisFrame();
+    this.activeRotationAxisId = null;
     this.pointerDown = null;
     this.syncCandidateMaterials();
     this.disposeAxisPreviewMeshes();
@@ -304,7 +336,9 @@ export class WorkpieceOriginSelector {
       boundsWorld: this.cloneBounds(this.boundsWorld),
       candidates: this.candidates.map((candidate) => this.cloneCandidate(candidate)),
       hoveredCandidateId: this.hoveredCandidateId,
+      hoveredAxisId: this.hoveredAxisId,
       selectedCandidateId: this.selectedCandidateId,
+      activeRotationAxisId: this.activeRotationAxisId,
       selection: this.getSelection(),
       axisPreview: this.getAxisPreview(),
     };
@@ -339,7 +373,22 @@ export class WorkpieceOriginSelector {
     }
 
     this.selectedCandidateId = id;
+    this.resetAxisFrame();
+    this.clearActiveRotationAxis({ emit: false });
     this.syncCandidateMaterials();
+    this.syncAxisPreview();
+    this.onOriginChange?.(this.getSelection());
+    this.emitState();
+    return true;
+  }
+
+  selectAxisById(axisId: WorkpieceOriginAxisId): boolean {
+    if (!AXIS_IDS.includes(axisId) || !this.getAxisPreview()) {
+      return false;
+    }
+
+    this.activeRotationAxisId = axisId;
+    this.rotateAxisFrame(axisId, WORKPIECE_AXIS_ROTATION_STEP_RADIANS);
     this.syncAxisPreview();
     this.onOriginChange?.(this.getSelection());
     this.emitState();
@@ -351,13 +400,13 @@ export class WorkpieceOriginSelector {
   }
 
   private handlePointer(pointerInfo: PointerInfo) {
-    if (!this.config.enabled || !this.boundsWorld || !this.config.showCandidates) {
+    if (!this.config.enabled || !this.boundsWorld) {
       return;
     }
 
     switch (pointerInfo.type) {
       case PointerEventTypes.POINTERMOVE:
-        this.setHoveredCandidate(this.pickCandidateId());
+        this.handlePointerMove(pointerInfo);
         break;
       case PointerEventTypes.POINTERDOWN:
         this.handlePointerDown(pointerInfo);
@@ -370,16 +419,25 @@ export class WorkpieceOriginSelector {
     }
   }
 
+  private handlePointerMove(pointerInfo: PointerInfo) {
+    const axisId = this.pickAxisId(pointerInfo.event);
+    const candidateId = axisId ? null : this.config.showCandidates ? this.pickCandidateId() : null;
+    this.setHoverTargets(candidateId, axisId);
+  }
+
   private handlePointerDown(pointerInfo: PointerInfo) {
     const event = pointerInfo.event;
     if (event.button !== 0) {
       return;
     }
 
+    const axisId = this.pickAxisId(event);
+    const candidateId = axisId ? null : this.config.showCandidates ? this.pickCandidateId() : null;
     this.pointerDown = {
       x: event.clientX,
       y: event.clientY,
-      candidateId: this.pickCandidateId(),
+      targetType: candidateId ? 'candidate' : axisId ? 'axis' : null,
+      targetId: candidateId ?? axisId,
     };
   }
 
@@ -398,9 +456,19 @@ export class WorkpieceOriginSelector {
       return;
     }
 
-    const candidateId = this.pickCandidateId();
-    if (candidateId && candidateId === pointerDown.candidateId) {
-      this.selectCandidateById(candidateId);
+    const axisId = this.pickAxisId(event);
+    const candidateId = axisId ? null : this.config.showCandidates ? this.pickCandidateId() : null;
+    const targetType = candidateId ? 'candidate' : axisId ? 'axis' : null;
+    const targetId = candidateId ?? axisId;
+
+    if (!targetId || targetType !== pointerDown.targetType || targetId !== pointerDown.targetId) {
+      return;
+    }
+
+    if (targetType === 'candidate') {
+      this.selectCandidateById(targetId);
+    } else if (targetType === 'axis') {
+      this.selectAxisById(targetId as WorkpieceOriginAxisId);
     }
   }
 
@@ -421,19 +489,176 @@ export class WorkpieceOriginSelector {
     return this.candidateByMesh.get(mesh)?.id ?? null;
   }
 
-  private setHoveredCandidate(candidateId: string | null) {
+  private pickAxisId(event: { clientX: number; clientY: number }): WorkpieceOriginAxisId | null {
+    const preview = this.getAxisPreview();
+    if (!preview) {
+      return null;
+    }
+
+    const pointer = this.getCanvasPointer(event);
+    const hitThresholdPixels = 14;
+    let closestAxisId: WorkpieceOriginAxisId | null = null;
+    let closestDistance = hitThresholdPixels;
+
+    for (const axisId of AXIS_IDS) {
+      const direction = this.getAxisDirectionFromPreview(preview, axisId);
+      const start = this.projectToScreen(preview.originWorld);
+      const end = this.projectToScreen(
+        preview.originWorld.add(direction.scale(preview.axisLengthWorld)),
+      );
+      const distance = this.distanceToScreenSegment(
+        pointer.x,
+        pointer.y,
+        start.x,
+        start.y,
+        end.x,
+        end.y,
+      );
+
+      if (distance <= closestDistance) {
+        closestAxisId = axisId;
+        closestDistance = distance;
+      }
+    }
+
+    return closestAxisId;
+  }
+
+  private getCanvasPointer(event: { clientX: number; clientY: number }) {
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = rect.width > 0 ? this.canvas.clientWidth / rect.width : 1;
+    const scaleY = rect.height > 0 ? this.canvas.clientHeight / rect.height : 1;
+    return {
+      x: (event.clientX - rect.left) * scaleX,
+      y: (event.clientY - rect.top) * scaleY,
+    };
+  }
+
+  private setHoverTargets(
+    candidateId: string | null,
+    axisId: WorkpieceOriginAxisId | null,
+  ) {
     const nextCandidateId = candidateId && this.candidateMeshes.has(candidateId)
       ? candidateId
       : null;
+    const nextAxisId = !nextCandidateId && axisId && AXIS_IDS.includes(axisId)
+      ? axisId
+      : null;
 
-    if (this.hoveredCandidateId === nextCandidateId) {
+    if (
+      this.hoveredCandidateId === nextCandidateId
+      && this.hoveredAxisId === nextAxisId
+    ) {
       return;
     }
 
     this.hoveredCandidateId = nextCandidateId;
+    this.hoveredAxisId = nextAxisId;
     this.syncCandidateMaterials();
     this.syncCanvasCursor();
     this.emitState();
+  }
+
+  private resetAxisFrame() {
+    this.axisXWorld = new Vector3(1, 0, 0);
+    this.axisYWorld = new Vector3(0, 1, 0);
+    this.axisZWorld = new Vector3(0, 0, 1);
+  }
+
+  private rotateAxisFrame(axisId: WorkpieceOriginAxisId, angleRadians: number) {
+    const rotationAxis = this.getFrameAxis(axisId);
+    const rotation = Quaternion.RotationAxis(rotationAxis, angleRadians);
+
+    this.axisXWorld = this.rotateFrameAxis(this.axisXWorld, rotation);
+    this.axisZWorld = this.rotateFrameAxis(this.axisZWorld, rotation);
+    this.axisYWorld = this.sanitizeAxisVector(Vector3.Cross(this.axisZWorld, this.axisXWorld));
+  }
+
+  private getFrameAxis(axisId: WorkpieceOriginAxisId) {
+    switch (axisId) {
+      case 'x':
+        return this.axisXWorld.clone();
+      case 'y':
+        return this.axisYWorld.clone();
+      case 'z':
+      default:
+        return this.axisZWorld.clone();
+    }
+  }
+
+  private rotateFrameAxis(axis: Vector3, rotation: Quaternion) {
+    const rotated = Vector3.Zero();
+    axis.applyRotationQuaternionToRef(rotation, rotated);
+    return this.sanitizeAxisVector(rotated);
+  }
+
+  private sanitizeAxisVector(axis: Vector3) {
+    const normalized = this.normalizeOrFallback(axis.clone());
+    normalized.x = this.sanitizeAxisComponent(normalized.x);
+    normalized.y = this.sanitizeAxisComponent(normalized.y);
+    normalized.z = this.sanitizeAxisComponent(normalized.z);
+    return normalized;
+  }
+
+  private sanitizeAxisComponent(value: number) {
+    if (Math.abs(value) < 1e-10) {
+      return 0;
+    }
+
+    if (Math.abs(value - 1) < 1e-10) {
+      return 1;
+    }
+
+    if (Math.abs(value + 1) < 1e-10) {
+      return -1;
+    }
+
+    return value;
+  }
+
+  private getAxisDirectionFromPreview(
+    preview: WorkpieceOriginAxisPreview,
+    axisId: WorkpieceOriginAxisId,
+  ) {
+    switch (axisId) {
+      case 'x':
+        return this.normalizeOrFallback(preview.axisXWorld);
+      case 'y':
+        return this.normalizeOrFallback(preview.axisYWorld);
+      case 'z':
+      default:
+        return this.normalizeOrFallback(preview.axisZWorld);
+    }
+  }
+
+  private projectToScreen(point: Vector3) {
+    return Vector3.Project(
+      point,
+      Matrix.IdentityReadOnly,
+      this.scene.getTransformMatrix(),
+      this.camera.viewport.toGlobal(this.canvas.clientWidth, this.canvas.clientHeight),
+    );
+  }
+
+  private distanceToScreenSegment(
+    px: number,
+    py: number,
+    ax: number,
+    ay: number,
+    bx: number,
+    by: number,
+  ) {
+    const abx = bx - ax;
+    const aby = by - ay;
+    const lengthSquared = abx * abx + aby * aby;
+    if (lengthSquared <= BOUND_EPSILON) {
+      return Math.hypot(px - ax, py - ay);
+    }
+
+    const t = Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lengthSquared));
+    const closestX = ax + abx * t;
+    const closestY = ay + aby * t;
+    return Math.hypot(px - closestX, py - closestY);
   }
 
   private getSelection(): WorkpieceOriginSelection | null {
@@ -456,9 +681,9 @@ export class WorkpieceOriginSelector {
         y: positionWorld.y * this.config.coordinateScale,
         z: positionWorld.z * this.config.coordinateScale,
       },
-      axisXWorld: new Vector3(1, 0, 0),
-      axisYWorld: new Vector3(0, 1, 0),
-      axisZWorld: new Vector3(0, 0, 1),
+      axisXWorld: this.axisXWorld.clone(),
+      axisYWorld: this.axisYWorld.clone(),
+      axisZWorld: this.axisZWorld.clone(),
     };
   }
 
@@ -496,21 +721,18 @@ export class WorkpieceOriginSelector {
 
     const axisDefinitions = [
       {
-        id: 'x',
-        color: new Color3(0.95, 0.12, 0.12),
-        material: this.axisXMaterial,
+        id: 'x' as const,
+        material: this.axisMaterials.x,
         direction: preview.axisXWorld,
       },
       {
-        id: 'y',
-        color: new Color3(0.16, 0.68, 0.18),
-        material: this.axisYMaterial,
+        id: 'y' as const,
+        material: this.axisMaterials.y,
         direction: preview.axisYWorld,
       },
       {
-        id: 'z',
-        color: new Color3(0.1, 0.32, 1),
-        material: this.axisZMaterial,
+        id: 'z' as const,
+        material: this.axisMaterials.z,
         direction: preview.axisZWorld,
       },
     ];
@@ -518,23 +740,30 @@ export class WorkpieceOriginSelector {
       this.resolveHandleRadius(bounds) * 0.9,
       preview.axisLengthWorld * 0.035,
     );
+    const shaftRadius = Math.max(tipDiameter * 0.16, preview.axisLengthWorld * 0.006);
 
     for (const axis of axisDefinitions) {
       const direction = this.normalizeOrFallback(axis.direction);
       const end = preview.originWorld.add(direction.scale(preview.axisLengthWorld));
-      const line = MeshBuilder.CreateLines(
+      const shaft = MeshBuilder.CreateTube(
         `workpieceOriginSelector.axis.${axis.id}`,
         {
-          points: [preview.originWorld, end],
+          path: [preview.originWorld, end],
+          radius: shaftRadius,
+          tessellation: 10,
         },
         this.scene,
       );
-      line.parent = this.root;
-      line.color = axis.color;
-      line.isPickable = false;
-      line.renderingGroupId = 2;
-      line.alwaysSelectAsActiveMesh = true;
-      this.axisPreviewMeshes.push(line);
+      shaft.parent = this.root;
+      shaft.material = axis.material;
+      shaft.isPickable = false;
+      shaft.renderingGroupId = 2;
+      shaft.alwaysSelectAsActiveMesh = true;
+      shaft.metadata = {
+        ...(shaft.metadata ?? {}),
+        workpieceOriginAxisId: axis.id,
+      };
+      this.axisPreviewMeshes.push(shaft);
 
       const tip = MeshBuilder.CreateSphere(
         `workpieceOriginSelector.axisTip.${axis.id}`,
@@ -550,7 +779,20 @@ export class WorkpieceOriginSelector {
       tip.isPickable = false;
       tip.renderingGroupId = 2;
       tip.alwaysSelectAsActiveMesh = true;
+      tip.metadata = {
+        ...(tip.metadata ?? {}),
+        workpieceOriginAxisId: axis.id,
+      };
       this.axisPreviewMeshes.push(tip);
+    }
+  }
+
+  private clearActiveRotationAxis(options: { emit?: boolean } = {}) {
+    const hadActiveAxis = this.activeRotationAxisId !== null;
+    this.activeRotationAxisId = null;
+
+    if (hadActiveAxis && options.emit !== false) {
+      this.emitState();
     }
   }
 
@@ -837,7 +1079,7 @@ export class WorkpieceOriginSelector {
   }
 
   private syncCanvasCursor() {
-    this.canvas.style.cursor = this.hoveredCandidateId ? 'pointer' : '';
+    this.canvas.style.cursor = this.hoveredCandidateId || this.hoveredAxisId ? 'pointer' : '';
   }
 
   private disposeBoundingBoxMesh() {
@@ -861,6 +1103,8 @@ export class WorkpieceOriginSelector {
     }
 
     this.axisPreviewMeshes.length = 0;
+    this.hoveredAxisId = null;
+    this.syncCanvasCursor();
   }
 
   private resolveHandleRadius(bounds: WorkpieceBoundsWorld) {

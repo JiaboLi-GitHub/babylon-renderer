@@ -320,6 +320,59 @@ test('shows workpiece origin candidates on the model bounding box', async ({ pag
     'workpieceOriginSelector.axisTip.y',
     'workpieceOriginSelector.axisTip.z',
   ]));
+  expect(selectedSelector.activeRotationAxisId).toBeNull();
+
+  const axisScreen = await page.evaluate((axisId) => (
+    (window as any).rendererDemo.getWorkpieceOriginAxisScreenPosition(axisId)
+  ), 'x');
+  expect(axisScreen).not.toBeNull();
+
+  await page.mouse.click(axisScreen.x, axisScreen.y);
+  await page.waitForFunction(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().activeRotationAxisId === 'x'
+  ));
+
+  const rotationSelector = await page.evaluate(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary()
+  ));
+  expect(rotationSelector.selection.axisXWorld).toEqual({ x: 1, y: 0, z: 0 });
+  expect(rotationSelector.selection.axisYWorld).toEqual({ x: 0, y: 0, z: 1 });
+  expect(rotationSelector.selection.axisZWorld).toEqual({ x: 0, y: -1, z: 0 });
+  expect(rotationSelector.axisPreview.axisXWorld).toEqual({ x: 1, y: 0, z: 0 });
+  expect(rotationSelector.axisPreview.axisYWorld).toEqual({ x: 0, y: 0, z: 1 });
+  expect(rotationSelector.axisPreview.axisZWorld).toEqual({ x: 0, y: -1, z: 0 });
+
+  for (const [axisId, expected] of [
+    ['y', {
+      axisXWorld: { x: 0, y: 0, z: -1 },
+      axisYWorld: { x: 0, y: 1, z: 0 },
+      axisZWorld: { x: 1, y: 0, z: 0 },
+    }],
+    ['z', {
+      axisXWorld: { x: 0, y: 1, z: 0 },
+      axisYWorld: { x: -1, y: 0, z: 0 },
+      axisZWorld: { x: 0, y: 0, z: 1 },
+    }],
+  ] as const) {
+    await page.evaluate((id) => {
+      (window as any).rendererDemo.clearWorkpieceOriginSelection();
+      (window as any).rendererDemo.selectWorkpieceOriginCandidate(id);
+    }, targetId);
+    const nextAxisScreen = await page.evaluate((id) => (
+      (window as any).rendererDemo.getWorkpieceOriginAxisScreenPosition(id)
+    ), axisId);
+    await page.mouse.click(nextAxisScreen.x, nextAxisScreen.y);
+    await page.waitForFunction((id) => (
+      (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().activeRotationAxisId === id
+    ), axisId);
+
+    const nextSelector = await page.evaluate(() => (
+      (window as any).rendererDemo.getWorkpieceOriginSelectorSummary()
+    ));
+    expect(nextSelector.selection.axisXWorld).toEqual(expected.axisXWorld);
+    expect(nextSelector.selection.axisYWorld).toEqual(expected.axisYWorld);
+    expect(nextSelector.selection.axisZWorld).toEqual(expected.axisZWorld);
+  }
   await expect(page.locator('#originToggle')).toBeChecked();
   await expect(page.locator('#originClearBtn')).toBeEnabled();
 
