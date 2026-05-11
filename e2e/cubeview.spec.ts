@@ -73,28 +73,16 @@ test('default isometric view', async ({ page }) => {
   await expect(cube).toHaveScreenshot('isometric.png');
 });
 
-test('starts with SSAO disabled', async ({ page }) => {
-  const ssaoToggle = page.locator('#ssaoToggle');
-  const ssaoToggleLabel = page.locator('#ssaoToggleLabel');
-  const summary = await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary());
+test('does not expose SSAO controls', async ({ page }) => {
+  await expect(page.locator('#ssaoToggle')).toHaveCount(0);
+  await expect(page.locator('#ssaoToggleLabel')).toHaveCount(0);
 
-  expect(summary.enabled).toBe(false);
-  await expect(ssaoToggle).not.toBeChecked();
+  const hasSsaoApi = await page.evaluate(() => (
+    'getSsaoSummary' in (window as any).rendererDemo
+    || 'setSsaoEnabled' in (window as any).rendererDemo
+  ));
 
-  if (summary.supported) {
-    await expect(ssaoToggle).toBeEnabled();
-    await ssaoToggleLabel.click();
-    await waitForRender(page);
-    await expect(ssaoToggle).toBeChecked();
-    expect(await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary().enabled)).toBe(true);
-
-    await ssaoToggleLabel.click();
-    await waitForRender(page);
-    await expect(ssaoToggle).not.toBeChecked();
-    expect(await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary().enabled)).toBe(false);
-  } else {
-    await expect(ssaoToggle).toBeDisabled();
-  }
+  expect(hasSsaoApi).toBe(false);
 });
 
 test('steel material uses a reflective textured PBR finish', async ({ page }) => {
@@ -117,12 +105,6 @@ test('steel material uses a reflective textured PBR finish', async ({ page }) =>
   expect(summary.anisotropyEnabled).toBe(true);
   expect(summary.anisotropyIntensity).toBeGreaterThan(0.4);
 
-  const ssao = await page.evaluate(() => (window as any).rendererDemo.getSsaoSummary());
-  if (ssao.supported) {
-    expect(ssao.enabled).toBe(true);
-    expect(ssao.totalStrength).toBeGreaterThan(0.45);
-    expect(ssao.totalStrength).toBeLessThan(0.6);
-  }
 });
 
 test('front view', async ({ page }) => {
@@ -261,6 +243,131 @@ test('shows a scale bar that follows the selected unit', async ({ page }) => {
   expect(centimeterScale.label).toMatch(/cm$/);
   expect(centimeterScale.value).toBeCloseTo(millimeterScale.value / 10);
   expect(centimeterScale.pixelWidth).toBeCloseTo(millimeterScale.pixelWidth);
+});
+
+test('shows workpiece origin candidates on the model bounding box', async ({ page }) => {
+  const selector = await page.evaluate(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary()
+  ));
+
+  expect(selector.enabled).toBe(true);
+  expect(selector.boundsWorld).not.toBeNull();
+  expect(selector.candidateCount).toBe(26);
+  expect(selector.selectedCandidateId).toBeNull();
+  expect(selector.selection).toBeNull();
+  expect(selector.axisPreview).toBeNull();
+  expect(selector.axisPreviewMeshNames).toEqual([]);
+
+  const kindCounts = selector.candidates.reduce(
+    (counts: Record<string, number>, candidate: { kind: string }) => {
+      counts[candidate.kind] = (counts[candidate.kind] ?? 0) + 1;
+      return counts;
+    },
+    {},
+  );
+  expect(kindCounts).toEqual({
+    corner: 8,
+    'edge-center': 12,
+    'face-center': 6,
+  });
+
+  const minCorner = selector.candidates.find((candidate: { id: string }) => (
+    candidate.id === 'corner:min-x:min-y:min-z'
+  ));
+  const maxFace = selector.candidates.find((candidate: { id: string }) => (
+    candidate.id === 'face-center:max-z'
+  ));
+
+  expect(minCorner.positionWorld).toEqual(selector.boundsWorld.min);
+  expect(maxFace.positionWorld.x).toBeCloseTo(selector.boundsWorld.center.x);
+  expect(maxFace.positionWorld.y).toBeCloseTo(selector.boundsWorld.center.y);
+  expect(maxFace.positionWorld.z).toBeCloseTo(selector.boundsWorld.max.z);
+
+  const targetId = 'face-center:max-z';
+  const targetScreen = await page.evaluate((id) => (
+    (window as any).rendererDemo.getWorkpieceOriginCandidateScreenPosition(id)
+  ), targetId);
+  expect(targetScreen).not.toBeNull();
+
+  await page.mouse.move(targetScreen.x, targetScreen.y);
+  await page.waitForFunction((id) => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().hoveredCandidateId === id
+  ), targetId);
+
+  await page.mouse.click(targetScreen.x, targetScreen.y);
+  await page.waitForFunction((id) => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().selectedCandidateId === id
+  ), targetId);
+
+  const selectedSelector = await page.evaluate(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary()
+  ));
+  expect(selectedSelector.selection.id).toBe(targetId);
+  expect(selectedSelector.selection.positionWorld).toEqual(maxFace.positionWorld);
+  expect(selectedSelector.selection.positionValue.x).toBeCloseTo(maxFace.positionWorld.x * 25);
+  expect(selectedSelector.selection.positionValue.y).toBeCloseTo(maxFace.positionWorld.y * 25);
+  expect(selectedSelector.selection.positionValue.z).toBeCloseTo(maxFace.positionWorld.z * 25);
+  expect(selectedSelector.axisPreview.originWorld).toEqual(maxFace.positionWorld);
+  expect(selectedSelector.axisPreview.axisLengthWorld).toBeGreaterThan(0);
+  expect(selectedSelector.axisPreview.axisXWorld).toEqual({ x: 1, y: 0, z: 0 });
+  expect(selectedSelector.axisPreview.axisYWorld).toEqual({ x: 0, y: 1, z: 0 });
+  expect(selectedSelector.axisPreview.axisZWorld).toEqual({ x: 0, y: 0, z: 1 });
+  expect(selectedSelector.axisPreviewMeshNames).toEqual(expect.arrayContaining([
+    'workpieceOriginSelector.axis.x',
+    'workpieceOriginSelector.axis.y',
+    'workpieceOriginSelector.axis.z',
+    'workpieceOriginSelector.axisTip.x',
+    'workpieceOriginSelector.axisTip.y',
+    'workpieceOriginSelector.axisTip.z',
+  ]));
+  await expect(page.locator('#originToggle')).toBeChecked();
+  await expect(page.locator('#originClearBtn')).toBeEnabled();
+
+  await page.locator('#originToggleLabel').click();
+  await page.waitForFunction(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().enabled === false
+  ));
+  await expect(page.locator('#originToggle')).not.toBeChecked();
+
+  await page.locator('#originToggleLabel').click();
+  await page.waitForFunction(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().enabled === true
+  ));
+  await expect(page.locator('#originToggle')).toBeChecked();
+
+  await page.locator('#originClearBtn').click();
+  await page.waitForFunction(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().selectedCandidateId === null
+  ));
+  const clearedSelector = await page.evaluate(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary()
+  ));
+  expect(clearedSelector.selection).toBeNull();
+  expect(clearedSelector.axisPreview).toBeNull();
+  expect(clearedSelector.axisPreviewMeshNames).toEqual([]);
+  await expect(page.locator('#originClearBtn')).toBeDisabled();
+
+  await page.evaluate((id) => {
+    (window as any).rendererDemo.selectWorkpieceOriginCandidate(id);
+  }, targetId);
+  await page.waitForFunction((id) => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary().selectedCandidateId === id
+  ), targetId);
+
+  await page.evaluate(() => {
+    (window as any).rendererDemo.offsetModel({ x: 12, y: 0, z: 0 });
+  });
+  await waitForRender(page);
+
+  const offsetSelector = await page.evaluate(() => (
+    (window as any).rendererDemo.getWorkpieceOriginSelectorSummary()
+  ));
+  expect(offsetSelector.candidateCount).toBe(26);
+  expect(offsetSelector.boundsWorld.min.x).toBeCloseTo(selector.boundsWorld.min.x + 12);
+  expect(offsetSelector.boundsWorld.max.x).toBeCloseTo(selector.boundsWorld.max.x + 12);
+  expect(offsetSelector.selectedCandidateId).toBeNull();
+  expect(offsetSelector.axisPreview).toBeNull();
+  expect(offsetSelector.axisPreviewMeshNames).toEqual([]);
 });
 
 test('generates a simple facing toolpath and exports G-code', async ({ page }) => {

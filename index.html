@@ -364,16 +364,17 @@
         </button>
       </div>
     </div>
-    <label id="ssaoToggleLabel" class="toolbar-switch" for="ssaoToggle">
-      <input id="ssaoToggle" type="checkbox">
-      <span class="switch-track" aria-hidden="true"></span>
-      SSAO
-    </label>
     <label id="shadowToggleLabel" class="toolbar-switch" for="shadowToggle">
       <input id="shadowToggle" type="checkbox" checked>
       <span class="switch-track" aria-hidden="true"></span>
       Shadow
     </label>
+    <label id="originToggleLabel" class="toolbar-switch" for="originToggle">
+      <input id="originToggle" type="checkbox" checked>
+      <span class="switch-track" aria-hidden="true"></span>
+      Origin
+    </label>
+    <button id="originClearBtn" class="toolbar-button secondary" type="button" disabled>Clear Origin</button>
     <span id="ioStatus">Ready.</span>
   </div>
   <div id="cubeViewWrapper">
@@ -390,13 +391,13 @@
       Matrix, Material, MeshBuilder, StandardMaterial, DynamicTexture, Color3, Color4, TransformNode,
     } from '@babylonjs/core';
     import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator.js';
-    import { SSAO2RenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/ssao2RenderingPipeline.js';
     import { ShadowOnlyMaterial } from '@babylonjs/materials/shadowOnly/shadowOnlyMaterial.js';
     import {
       CubeView,
       DEFAULT_LENGTH_UNIT,
       GridMap,
       LENGTH_UNITS,
+      WorkpieceOriginSelector,
       createFacingToolpath,
       generateFacingGcode,
       getGridUnitOptions,
@@ -440,80 +441,6 @@
     camera.angularSensibilityX = 4500;
     camera.angularSensibilityY = 4500;
     camera.attachControl(mainCanvas, true);
-
-    const CAM_SSAO_PIPELINE_NAME = 'camSsaoPipeline';
-    const isCamSsaoSupported = SSAO2RenderingPipeline.IsSupported;
-    const CAM_SSAO_DEFAULT_SETTINGS = {
-      samples: 16,
-      textureSamples: 1,
-      totalStrength: 0.68,
-      base: 0.08,
-      radiusScale: 0.16,
-      minRadius: 0.08,
-      maxRadius: 3.5,
-      minZAspect: 0.18,
-      epsilon: 0.035,
-      expensiveBlur: true,
-      bilateralSamples: 12,
-      bilateralSoften: 0.38,
-      bilateralTolerance: 0.45,
-    };
-    const CAM_SSAO_STEEL_SETTINGS = {
-      ...CAM_SSAO_DEFAULT_SETTINGS,
-      totalStrength: 0.52,
-      base: 0.06,
-      radiusScale: 0.13,
-      epsilon: 0.028,
-      bilateralSoften: 0.42,
-      bilateralTolerance: 0.52,
-    };
-    let camSsaoPipeline = null;
-
-    function getCamSsaoSettings() {
-      return currentMaterialMode === 'steel'
-        ? CAM_SSAO_STEEL_SETTINGS
-        : CAM_SSAO_DEFAULT_SETTINGS;
-    }
-
-    function applyCamSsaoSettings() {
-      if (!camSsaoPipeline) {
-        return;
-      }
-
-      const settings = getCamSsaoSettings();
-      camSsaoPipeline.samples = settings.samples;
-      camSsaoPipeline.textureSamples = settings.textureSamples;
-      camSsaoPipeline.totalStrength = settings.totalStrength;
-      camSsaoPipeline.base = settings.base;
-      camSsaoPipeline.minZAspect = settings.minZAspect;
-      camSsaoPipeline.epsilon = settings.epsilon;
-      camSsaoPipeline.expensiveBlur = settings.expensiveBlur;
-      camSsaoPipeline.bilateralSamples = settings.bilateralSamples;
-      camSsaoPipeline.bilateralSoften = settings.bilateralSoften;
-      camSsaoPipeline.bilateralTolerance = settings.bilateralTolerance;
-
-      if (modelRoot) {
-        updateCamSsao(getModelBounds(modelRoot.getChildMeshes()));
-      }
-    }
-
-    function ensureCamSsaoPipeline() {
-      if (camSsaoPipeline || !isCamSsaoSupported) {
-        return camSsaoPipeline;
-      }
-
-      camSsaoPipeline = new SSAO2RenderingPipeline(
-        CAM_SSAO_PIPELINE_NAME,
-        scene,
-        { ssaoRatio: 0.75, blurRatio: 0.75 },
-        null,
-      );
-      camSsaoPipeline.radius = 0.45;
-      camSsaoPipeline.maxZ = 80;
-      applyCamSsaoSettings();
-
-      return camSsaoPipeline;
-    }
 
     // CAM-style viewport lighting: high readability, low contrast, no cast shadows.
     scene.ambientColor = new Color3(0.22, 0.22, 0.22);
@@ -646,6 +573,26 @@
       canvas: mainCanvas,
       ...currentGridUnitOptions,
     });
+    const workpieceOriginSelector = new WorkpieceOriginSelector({
+      scene,
+      camera,
+      canvas: mainCanvas,
+      ...currentGridUnitOptions,
+      onStateChange: () => {
+        syncWorkpieceOriginUi();
+      },
+      onOriginChange: (selection) => {
+        if (!selection) {
+          setIoStatus('工件原点已清除。');
+          return;
+        }
+
+        const { x, y, z } = selection.positionValue;
+        setIoStatus(
+          `工件原点: X ${x.toFixed(3)}, Y ${y.toFixed(3)}, Z ${z.toFixed(3)} ${currentGridUnitOptions.unitLabel}`,
+        );
+      },
+    });
 
     const MATERIAL_MODES = {
       DEFAULT: 'default',
@@ -663,8 +610,6 @@
     ];
     let currentMaterialMode = MATERIAL_MODES.DEFAULT;
     let activeOverrideMaterial = null;
-    let ssaoEnabled = false;
-    let hasManualSsaoPreference = false;
     let shadowsEnabled = true;
 
     function getOverrideMaterialName(mode, name) {
@@ -821,10 +766,11 @@
     const materialPickerBtn = document.getElementById('materialPickerBtn');
     const materialPanel = document.getElementById('materialPanel');
     const materialOptions = [...document.querySelectorAll('[data-material-mode]')];
-    const ssaoToggle = document.getElementById('ssaoToggle');
-    const ssaoToggleLabel = document.getElementById('ssaoToggleLabel');
     const shadowToggle = document.getElementById('shadowToggle');
     const shadowToggleLabel = document.getElementById('shadowToggleLabel');
+    const originToggle = document.getElementById('originToggle');
+    const originToggleLabel = document.getElementById('originToggleLabel');
+    const originClearBtn = document.getElementById('originClearBtn');
     const scaleBar = document.getElementById('scaleBar');
     const scaleBarLabel = document.getElementById('scaleBarLabel');
     const scaleBarLine = document.getElementById('scaleBarLine');
@@ -1547,50 +1493,17 @@
     }
 
     function syncRenderSwitchUi() {
-      ssaoToggle.checked = ssaoEnabled;
-      ssaoToggle.disabled = ioBusy || !isCamSsaoSupported;
-      ssaoToggleLabel.classList.toggle('is-disabled', ssaoToggle.disabled);
-
       shadowToggle.checked = shadowsEnabled;
       shadowToggle.disabled = ioBusy;
       shadowToggleLabel.classList.toggle('is-disabled', shadowToggle.disabled);
     }
 
-    function setSsaoEnabled(enabled, { silent = false } = {}) {
-      const pipeline = enabled ? ensureCamSsaoPipeline() : camSsaoPipeline;
-      const nextEnabled = Boolean(enabled && pipeline);
-
-      if (pipeline && nextEnabled) {
-        applyCamSsaoSettings();
-      }
-
-      if (pipeline && ssaoEnabled !== nextEnabled) {
-        const pipelineManager = scene.postProcessRenderPipelineManager;
-        if (nextEnabled) {
-          pipelineManager.attachCamerasToRenderPipeline(CAM_SSAO_PIPELINE_NAME, [camera], true);
-        } else {
-          pipelineManager.detachCamerasFromRenderPipeline(CAM_SSAO_PIPELINE_NAME, [camera]);
-        }
-      }
-
-      ssaoEnabled = nextEnabled;
-      syncRenderSwitchUi();
-
-      if (!silent) {
-        setIoStatus(isCamSsaoSupported
-          ? `SSAO ${ssaoEnabled ? 'enabled' : 'disabled'}.`
-          : 'SSAO is not supported.');
-      }
-    }
-
-    function syncMaterialViewportEnhancement() {
-      if (ssaoEnabled) {
-        applyCamSsaoSettings();
-      }
-
-      if (!hasManualSsaoPreference) {
-        setSsaoEnabled(currentMaterialMode === 'steel', { silent: true });
-      }
+    function syncWorkpieceOriginUi() {
+      const state = workpieceOriginSelector.getState();
+      originToggle.checked = state.enabled;
+      originToggle.disabled = ioBusy;
+      originToggleLabel.classList.toggle('is-disabled', originToggle.disabled);
+      originClearBtn.disabled = ioBusy || !state.selectedCandidateId;
     }
 
     function setShadowEnabled(enabled, { silent = false } = {}) {
@@ -1604,6 +1517,15 @@
       }
     }
 
+    function setWorkpieceOriginEnabled(enabled, { silent = false } = {}) {
+      workpieceOriginSelector.setEnabled(Boolean(enabled));
+      syncWorkpieceOriginUi();
+
+      if (!silent) {
+        setIoStatus(`Origin picker ${workpieceOriginSelector.getState().enabled ? 'shown' : 'hidden'}.`);
+      }
+    }
+
     function setIoBusy(busy) {
       ioBusy = busy;
       stepFileInput.disabled = busy;
@@ -1613,6 +1535,7 @@
       stepImportLabel.classList.toggle('is-disabled', busy);
       syncToolpathUi();
       syncRenderSwitchUi();
+      syncWorkpieceOriginUi();
     }
 
     function setProjectUnit(unit) {
@@ -1622,10 +1545,13 @@
       unitSelect.value = currentUnit;
       clearToolpath({ silent: true });
       gridMap.setUnitOptions(currentGridUnitOptions);
+      workpieceOriginSelector.setUnitOptions(currentGridUnitOptions);
       fitCameraToModel(modelRoot.getChildMeshes());
       syncGridElevationToModel();
       gridMap.fitToMeshes(modelRoot.getChildMeshes());
+      workpieceOriginSelector.fitToMeshes(modelRoot.getChildMeshes());
       gridMap.update();
+      workpieceOriginSelector.update();
       updateScaleBar();
       setIoStatus(`Unit set to ${currentGridUnitOptions.unitLabel}.`);
     }
@@ -1683,7 +1609,6 @@
       currentMaterialMode = mode;
       applyMaterialModeToRoot(modelRoot);
       applyChipMaterialToActiveChips();
-      syncMaterialViewportEnhancement();
       updateMaterialPickerUi();
       setMaterialPanelOpen(false);
       setIoStatus(`材质已设置为${MATERIAL_MODE_LABELS[currentMaterialMode]}。`);
@@ -1719,18 +1644,24 @@
       }
     });
 
-    ssaoToggle.addEventListener('change', () => {
-      hasManualSsaoPreference = true;
-      setSsaoEnabled(ssaoToggle.checked);
-    });
-
     shadowToggle.addEventListener('change', () => {
       setShadowEnabled(shadowToggle.checked);
+    });
+
+    originToggle.addEventListener('change', () => {
+      setWorkpieceOriginEnabled(originToggle.checked);
+    });
+
+    originClearBtn.addEventListener('click', () => {
+      if (!ioBusy) {
+        workpieceOriginSelector.clearSelection();
+      }
     });
 
     updateMaterialPickerUi();
     syncToolpathUi();
     syncRenderSwitchUi();
+    syncWorkpieceOriginUi();
 
     function getModelBounds(meshes) {
       if (!meshes.length) {
@@ -1777,19 +1708,6 @@
       gridMap.setElevation(bounds ? getGridElevationForBounds(bounds) : 0);
     }
 
-    function updateCamSsao(bounds) {
-      if (!camSsaoPipeline || !bounds) {
-        return;
-      }
-
-      const settings = getCamSsaoSettings();
-      camSsaoPipeline.radius = Math.max(
-        settings.minRadius,
-        Math.min(settings.maxRadius, bounds.boundingRadius * settings.radiusScale),
-      );
-      camSsaoPipeline.maxZ = Math.max(20, camera.radius * 2.8, bounds.boundingRadius * 5);
-    }
-
     function fitCameraToModel(meshes) {
       const bounds = getModelBounds(meshes);
       if (!bounds) {
@@ -1805,8 +1723,6 @@
       if (camera.mode === Camera.ORTHOGRAPHIC_CAMERA) {
         applyOrthographicBounds(camera);
       }
-
-      updateCamSsao(bounds);
     }
 
     function syncCamShadowCasters(root) {
@@ -1965,19 +1881,19 @@
         triangleCount: summary.triangleCount,
       };
       applyMaterialModeToRoot(modelRoot);
-      syncMaterialViewportEnhancement();
 
       fitCameraToModel(modelRoot.getChildMeshes());
       syncGridElevationToModel();
       gridMap.fitToMeshes(modelRoot.getChildMeshes());
+      workpieceOriginSelector.fitToMeshes(modelRoot.getChildMeshes());
       syncCamShadowCasters(modelRoot);
     }
 
     applyMaterialModeToRoot(modelRoot);
-    syncMaterialViewportEnhancement();
     fitCameraToModel(modelRoot.getChildMeshes());
     syncGridElevationToModel();
     gridMap.fitToMeshes(modelRoot.getChildMeshes());
+    workpieceOriginSelector.fitToMeshes(modelRoot.getChildMeshes());
     syncCamShadowCasters(modelRoot);
 
     engine.runRenderLoop(() => {
@@ -1986,6 +1902,7 @@
       updateChipParticles(deltaSeconds);
       updateCamViewportLights();
       gridMap.update();
+      workpieceOriginSelector.update();
       updateScaleBar();
       scene.render();
     });
@@ -2046,6 +1963,77 @@
       beta: camera.beta,
     });
 
+    function serializeVector3(value) {
+      return value
+        ? {
+          x: value.x,
+          y: value.y,
+          z: value.z,
+        }
+        : null;
+    }
+
+    function getWorkpieceOriginSelectorSummary() {
+      const state = workpieceOriginSelector.getState();
+      return {
+        enabled: state.enabled,
+        boundsWorld: state.boundsWorld
+          ? {
+            min: serializeVector3(state.boundsWorld.min),
+            max: serializeVector3(state.boundsWorld.max),
+            center: serializeVector3(state.boundsWorld.center),
+            size: serializeVector3(state.boundsWorld.size),
+            diagonal: state.boundsWorld.diagonal,
+          }
+          : null,
+        candidateCount: state.candidates.length,
+        candidates: state.candidates.map((candidate) => ({
+          id: candidate.id,
+          kind: candidate.kind,
+          positionWorld: serializeVector3(candidate.positionWorld),
+          normalWorld: serializeVector3(candidate.normalWorld),
+        })),
+        hoveredCandidateId: state.hoveredCandidateId,
+        selectedCandidateId: state.selectedCandidateId,
+        selection: state.selection
+          ? {
+            id: state.selection.id,
+            kind: state.selection.kind,
+            positionWorld: serializeVector3(state.selection.positionWorld),
+            positionValue: { ...state.selection.positionValue },
+            axisXWorld: serializeVector3(state.selection.axisXWorld),
+            axisYWorld: serializeVector3(state.selection.axisYWorld),
+            axisZWorld: serializeVector3(state.selection.axisZWorld),
+          }
+          : null,
+        axisPreview: state.axisPreview
+          ? {
+            originWorld: serializeVector3(state.axisPreview.originWorld),
+            axisLengthWorld: state.axisPreview.axisLengthWorld,
+            axisXWorld: serializeVector3(state.axisPreview.axisXWorld),
+            axisYWorld: serializeVector3(state.axisPreview.axisYWorld),
+            axisZWorld: serializeVector3(state.axisPreview.axisZWorld),
+          }
+          : null,
+        axisPreviewMeshNames: scene.meshes
+          .map((mesh) => mesh.name)
+          .filter((name) => (
+            name.startsWith('workpieceOriginSelector.axis.')
+            || name.startsWith('workpieceOriginSelector.axisTip.')
+          )),
+      };
+    }
+
+    function getWorkpieceOriginCandidateScreenPosition(id) {
+      const state = workpieceOriginSelector.getState();
+      const candidate = state.candidates.find((item) => item.id === id);
+      if (!candidate) {
+        return null;
+      }
+
+      return serializeVector3(projectToScreen(candidate.positionWorld));
+    }
+
     // Expose for e2e tests
     window.cubeView = cubeView;
     window.rendererDemo = {
@@ -2092,6 +2080,11 @@
         };
       },
       getGridSummary: () => ({ ...gridMap.getState() }),
+      getWorkpieceOriginSelectorSummary,
+      getWorkpieceOriginCandidateScreenPosition,
+      selectWorkpieceOriginCandidate: (id) => workpieceOriginSelector.selectCandidateById(id),
+      clearWorkpieceOriginSelection: () => workpieceOriginSelector.clearSelection(),
+      setWorkpieceOriginEnabled: (enabled) => setWorkpieceOriginEnabled(enabled, { silent: true }),
       getGridLabelNames: () => scene.meshes
         .map((mesh) => mesh.name)
         .filter((name) => name.startsWith('grid_right_') || name.startsWith('grid_bottom_')),
@@ -2133,21 +2126,6 @@
         };
       },
       setShadowEnabled: (enabled) => setShadowEnabled(enabled),
-      getSsaoSummary: () => ({
-        supported: isCamSsaoSupported,
-        enabled: ssaoEnabled,
-        radius: camSsaoPipeline?.radius ?? 0,
-        totalStrength: camSsaoPipeline?.totalStrength ?? 0,
-        base: camSsaoPipeline?.base ?? 0,
-        maxZ: camSsaoPipeline?.maxZ ?? 0,
-        samples: camSsaoPipeline?.samples ?? 0,
-        textureSamples: camSsaoPipeline?.textureSamples ?? 0,
-        expensiveBlur: camSsaoPipeline?.expensiveBlur ?? false,
-        bilateralSamples: camSsaoPipeline?.bilateralSamples ?? 0,
-        bilateralSoften: camSsaoPipeline?.bilateralSoften ?? 0,
-        bilateralTolerance: camSsaoPipeline?.bilateralTolerance ?? 0,
-      }),
-      setSsaoEnabled: (enabled) => setSsaoEnabled(enabled),
       generateToolpath: () => generateToolpath(),
       clearToolpath: () => clearToolpath({ silent: false }),
       getToolpathGcode: () => getActiveToolpathGcode(),
@@ -2228,6 +2206,7 @@
         fitCameraToModel(modelRoot.getChildMeshes());
         syncGridElevationToModel();
         gridMap.fitToMeshes(modelRoot.getChildMeshes());
+        workpieceOriginSelector.fitToMeshes(modelRoot.getChildMeshes());
         updateCamShadowGround();
       },
     };

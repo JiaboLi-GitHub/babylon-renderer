@@ -1,5 +1,6 @@
 export { CubeView } from './CubeView';
 export { GridMap } from './GridMap';
+export { WorkpieceOriginSelector } from './WorkpieceOriginSelector';
 export {
   DEFAULT_LENGTH_UNIT,
   LENGTH_UNITS,
@@ -24,6 +25,16 @@ export type {
   GridMapState,
   GridMapUnitOptions,
 } from './GridMap';
+export type {
+  WorkpieceOriginAxisPreview,
+  WorkpieceBoundsWorld,
+  WorkpieceOriginCandidate,
+  WorkpieceOriginCandidateKind,
+  WorkpieceOriginSelection,
+  WorkpieceOriginSelectorOptions,
+  WorkpieceOriginSelectorState,
+  WorkpieceOriginSelectorUnitOptions,
+} from './WorkpieceOriginSelector';
 export type {
   GridUnitOptions,
   LengthUnit,
